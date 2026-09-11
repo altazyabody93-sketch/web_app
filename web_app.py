@@ -37,6 +37,61 @@ def db():
     return conn
 
 
+# ========== إنشاء الجداول ==========
+def init_db():
+    """إنشاء الجداول ← إذا ما موجودة"""
+    with db() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT,
+            price_usd REAL, price_stars INTEGER, category TEXT, stock INTEGER DEFAULT 1,
+            code TEXT, status TEXT DEFAULT 'available', sale_type TEXT DEFAULT 'auto',
+            created_at TEXT, sold_at TEXT, buyer_id TEXT, file_id TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT UNIQUE, username TEXT,
+            first_name TEXT, balance_usd REAL DEFAULT 0, balance_stars INTEGER DEFAULT 0,
+            total_spent REAL DEFAULT 0, orders_count INTEGER DEFAULT 0,
+            created_at TEXT, last_active TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER, buyer_id TEXT,
+            amount_usd REAL, amount_stars INTEGER, payment_method TEXT,
+            status TEXT DEFAULT 'pending', sold_at TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY, value TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT UNIQUE, added_at TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id TEXT,
+            referred_id TEXT UNIQUE, amount REAL, created_at TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS charge_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, amount_usd REAL,
+            amount_stars INTEGER, is_active INTEGER DEFAULT 1, created_at TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS star_charges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, username TEXT,
+            amount_usd REAL, amount_stars INTEGER, charged_at TEXT
+        )''')
+        
+        # الإعدادات الافتراضية
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('store_name', '🛍️ متجر الأرقام')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('exchange_rate', '50')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_reward', '0.05')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_enabled', '1')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_daily_limit', '10')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_username', 'Mohammed20360_bot')")
+        conn.commit()
+
+
+# ✅ شغّل ← مرة واحدة ← عند بدء التطبيق
+init_db()
+
+
+# ========== دوال الإعدادات العامة ==========
 def get_setting(key, default=""):
     with db() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -246,7 +301,8 @@ def get_recent_referrals(user_id, limit=10):
 def count_users():
     with db() as conn:
         return conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        
+
+
 # ========== التحقق من Telegram Login ==========
 def verify_telegram_auth(data):
     """التحقق من صحة بيانات Telegram Login Widget"""
@@ -259,7 +315,6 @@ def verify_telegram_auth(data):
     hmac_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
 
     return hmac_hash == check_hash
-
 
 # ========== حماية الصفحات ==========
 def login_required(f):
@@ -294,52 +349,6 @@ def inject_globals():
         "store_name": get_setting('store_name', '🛍️ متجر الأرقام'),
         "developer": DEVELOPER_USERNAME,
     }
-
-
-# ========== القالب الأساسي ==========
-BASE_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title or store_name }}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>✨ {{ store_name }}</h1>
-            {% if current_user %}
-            <div class="user-info">
-                <span>👤 {{ current_user.first_name }}</span>
-                <a href="/logout" class="btn btn-danger" style="padding: 8px 16px; font-size: 12px;">خروج</a>
-            </div>
-            {% endif %}
-        </div>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                <div class="flash {{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        {% block content %}{% endblock %}
-
-        <div class="footer">
-            <p>💙 {{ store_name }} — جميع الحقوق محفوظة</p>
-            <p style="font-size: 12px; margin-top: 8px;">تطوير: @{{ developer }}</p>
-        </div>
-    </div>
-
-    <script src="/static/js/script.js"></script>
-</body>
-</html>
-"""
 
 
 # ========== صفحة تسجيل الدخول ==========
@@ -394,62 +403,7 @@ def login():
     """
     
     return render_page(content, title="تسجيل الدخول")
-    if request.method == 'POST':
-        uid = request.form.get('user_id', '').strip()
-        if not uid.isdigit():
-            flash("الآيدي يجب أن يكون أرقاماً", "error")
-            return redirect(url_for('login'))
-
-        if not get_user(uid):
-            create_user(uid, "", f"مستخدم {uid}")
-
-        session['user_id'] = uid
-        flash("✅ تم تسجيل الدخول بنجاح", "success")
-        return redirect(url_for('index'))
-
-    login_page = """
-    {% extends "base" %}
-    {% block content %}
-    <div class="card" style="max-width: 500px; margin: 40px auto;">
-        <h2 style="text-align: center; margin-bottom: 30px; color: #3b82f6;">
-            🔐 تسجيل الدخول
-        </h2>
-        
-        <div style="text-align: center; margin-bottom: 30px;">
-            <p style="color: #94a3b8; margin-bottom: 20px;">
-                أدخل الآيدي الخاص بك في Telegram
-            </p>
-            
-            <div style="background: #0a0e1a; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-                <p style="color: #10b981; font-weight: 700;">
-                    💡 كيف أحصل على الآيدي؟
-                </p>
-                <p style="font-size: 14px; color: #94a3b8; margin-top: 10px;">
-                    افتح البوت وأرسل <code>/id</code>
-                </p>
-            </div>
-        </div>
-
-        <form method="POST">
-            <div class="input-group">
-                <label>🆔 الآيدي</label>
-                <input type="text" name="user_id" class="input" 
-                       placeholder="مثال: 123456789" required
-                       pattern="[0-9]+">
-            </div>
-            <button type="submit" class="btn btn-primary btn-block">
-                🚀 دخول
-            </button>
-        </form>
-    </div>
-    {% endblock %}
-    """
-    return render_template_string(
-        BASE_TEMPLATE.replace("{% block content %}{% endblock %}", "{% block content %}{{ content | safe }}{% endblock %}"),
-        content=render_template_string(login_page).replace("{% extends \"base\" %}", "").replace("{% block content %}", "").replace("{% endblock %}", ""),
-        title="تسجيل الدخول"
-    )
-
+    
 
 @app.route('/auth/telegram')
 def auth_telegram():
