@@ -83,7 +83,7 @@ def init_db():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_reward', '0.05')")
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_enabled', '1')")
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_daily_limit', '10')")
-        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_username', 'Mohammed20360_bot')")
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_username', 'sd_5g_bot')")
         conn.commit()
 
 
@@ -923,7 +923,7 @@ def balance():
 def charge():
     prices = get_charge_prices()
     rate = int(get_setting('exchange_rate', '50'))
-    bot_username = get_setting('bot_username', 'Mohammed20360_bot')
+    bot_username = get_setting('bot_username', 'sd_5g_bot')
     
     if not prices:
         content = """
@@ -1040,7 +1040,7 @@ def share():
     daily = get_daily_referrals(uid)
     daily_limit = int(get_setting('referral_daily_limit', '10'))
     reward = get_referral_reward()
-    bot_username = get_setting('bot_username', 'Mohammed20360_bot')
+    bot_username = get_setting('bot_username', 'sd_5g_bot')
     recent = get_recent_referrals(uid)
     ref_link = f"https://t.me/{bot_username}?start=ref_{uid}"
 
