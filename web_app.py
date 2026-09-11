@@ -969,7 +969,7 @@ def balance():
 def charge():
     prices = get_charge_prices()
     rate = int(get_setting('exchange_rate', '50'))
-    bot_username = get_setting('bot_username', 'YourBot')
+    bot_username = get_setting('bot_username', 'Mohammed20360_bot')
     
     if not prices:
         content = """
@@ -1086,7 +1086,7 @@ def share():
     daily = get_daily_referrals(uid)
     daily_limit = int(get_setting('referral_daily_limit', '10'))
     reward = get_referral_reward()
-    bot_username = get_setting('bot_username', 'YourBot')
+    bot_username = get_setting('bot_username', 'Mohammed20360_bot')
     recent = get_recent_referrals(uid)
     ref_link = f"https://t.me/{bot_username}?start=ref_{uid}"
 
