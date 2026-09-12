@@ -16,7 +16,7 @@ from flask import (
 import requests
 
 # ========== الإعدادات ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8858406129:AAFPo6JkUTa8sf26HFILboVYp5whUA8LD3Q")
 BOT_ID = BOT_TOKEN.split(":")[0]
 ADMIN_IDS = ["7325566792", "7602226699"]
 DEVELOPER_USERNAME = "MO_5_H"
@@ -1949,11 +1949,16 @@ def run_telegram_bot():
         traceback.print_exc()
 
 
-# ========== التشغيل الرئيسي ==========
+# # ========== التشغيل الرئيسي ==========
 if __name__ == "__main__":
     if not os.path.exists(DB_PATH):
         print(f"⚠️ قاعدة البيانات {DB_PATH} غير موجودة!")
     
-    # ⚠️ البوت ← شغال منفصل ← ما نشغّله هنا
+    # تشغيل بوت تيليجرام في خلفية السيرفر
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
+    print("🤖 تم بدء تشغيل خيط البوت بنجاح...")
+
+    # تشغيل سيرفر الموقع
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
