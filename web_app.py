@@ -1954,6 +1954,11 @@ if __name__ == "__main__":
     if not os.path.exists(DB_PATH):
         print(f"⚠️ قاعدة البيانات {DB_PATH} غير موجودة!")
     
-    # ⚠️ البوت شغال في bot.py منفصل — لا نشغّله هنا
+    # تشغيل البوت في Thread
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
+    print("🤖 تم تشغيل البوت في Thread منفصل")
+    
+    # تشغيل Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
