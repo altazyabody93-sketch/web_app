@@ -1951,13 +1951,19 @@ def run_telegram_bot():
 
 # ========== التشغيل الرئيسي ==========
 if __name__ == "__main__":
-    # تشغيل البوت في Thread
+    # التحقق من قاعدة البيانات
+    if not os.path.exists(DB_PATH):
+        print(f"⚠️ قاعدة البيانات {DB_PATH} غير موجودة!")
+    
+    # ✅ تشغيل البوت في Thread منفصل
     import threading
     bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
     bot_thread.start()
     print("🤖 تم تشغيل البوت في Thread منفصل")
     
-    # تشغيل Flask
+    # ✅ تشغيل Flask
     port = int(os.environ.get("PORT", 5000))
     print(f"🚀 تشغيل الموقع على المنفذ {port}")
+    print(f"🌐 الرابط: http://localhost:{port}")
+    
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
