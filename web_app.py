@@ -16,7 +16,7 @@ from flask import (
 import requests
 
 # ========== الإعدادات ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAFPh8fAUNdehGuy8B2jd3l6KQlu32w1XJY")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAHI-yCQ1T-qlL8yJ1qDTE7tPUHa9QtqVuo")
 BOT_ID = BOT_TOKEN.split(":")[0]
 ADMIN_IDS = ["7325566792", "7602226699"]
 DEVELOPER_USERNAME = "MO_5_H"
