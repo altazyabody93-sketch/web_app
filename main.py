@@ -255,33 +255,23 @@ def db_init() -> None:
         cur = conn.execute("SELECT COUNT(*) AS c FROM request_types")
         if cur.fetchone()["c"] == 0:
             for name, desc, tmpl, pos in DEFAULT_TYPES:
-                conn.execute(
-                    "INSERT INTO request_types(name, description, template, enabled, created_at) "
-                    "VALUES (?,?,?,1,?)",
-                    (name, desc, tmpl, now().isoformat()),
-                )
-                tid = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-                conn.execute(
-                    "INSERT INTO message_templates(type_id, body, updated_at) VALUES (?,?,?)",
-                    (tid, tmpl, now().isoformat()),
-                )
+                conn.execute(...)
+                ...
         for k, v in DEFAULT_SETTINGS.items():
-            conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (k, v))
-        conn.execute(
-            "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)",
-            ("response_keywords", json.dumps(DEFAULT_RESPONSE_KEYWORDS, ensure_ascii=False)),
-        )
+            conn.execute(...)
+        conn.execute(...)
         for a in ADMIN_IDS:
-            conn.execute(
-                "INSERT OR IGNORE INTO admins(telegram_id, role, added_at) VALUES (?,?,?)",
-                (a, "ADMIN", now().isoformat()),
-            )
+            conn.execute(...)
         for a in SUPER_ADMIN_IDS:
-            conn.execute(
-                "INSERT OR REPLACE INTO admins(telegram_id, role, added_at) VALUES (?,?,?)",
-                (a, "SUPER_ADMIN", now().isoformat()),
-            )
+            conn.execute(...)
         conn.commit()
+
+
+# ✅ تنفيذ فوري عند بدء البرنامج
+try:
+    db_init()
+except Exception as _e:
+    print(f"DB init warning: {_e}")
 
 
 def db_exec(query: str, params: tuple = ()) -> None:
