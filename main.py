@@ -11,15 +11,13 @@ import os
 import random
 import re
 import shutil
-import smtplib
 import sqlite3
 import threading
 import time
 import uuid
+import requests
 from contextlib import closing
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from enum import Enum
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -52,7 +50,6 @@ BOT_NAME = "المطري دعم"
 RATE_LIMIT_SECONDS = 1
 BACKUP_DIR = "backups"
 
-# التحقق
 if not BOT_TOKEN or ":" not in BOT_TOKEN:
     raise SystemExit("❌ BOT_TOKEN غير صحيح - حطه في Environment Variables")
 if not ADMIN_IDS or 0 in ADMIN_IDS:
@@ -60,7 +57,6 @@ if not ADMIN_IDS or 0 in ADMIN_IDS:
 
 Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 
-# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -70,28 +66,10 @@ log = logging.getLogger("matary")
 
 
 # ============================================================
-# 📧 EMAIL CONFIG
+# 📧 EMAIL CONFIG (Resend API)
 # ============================================================
-# ⚠️ مهم: استبدل xxxx بالـ App Password الحقيقي
-# طريقة الحصول عليه:
-# 1) https://myaccount.google.com/apppasswords
-# 2) اختر Mail → Other → Bot
-# 3) انسخ الكود (16 حرف)
-
-SENDER_EMAILS = [
-    {
-        "email": "altazyabody93@gmail.com",
-        "password": "xxxx xxxx xxxx xxxx",   # ← استبدل هذا
-    },
-    {
-        "email": "altazyabody9999@gmail.com",
-        "password": "xxxx xxxx xxxx xxxx",   # ← استبدل هذا
-    },
-    {
-        "email": "altazyabody733@gmail.com",
-        "password": "xxxx xxxx xxxx xxxx",   # ← استبدل هذا
-    },
-]
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM = "onboarding@resend.dev"
 
 WHATSAPP_EMAILS = [
     "1979975992710010@support.whatsapp.com",
@@ -102,8 +80,9 @@ WHATSAPP_EMAILS = [
     "web@support.whatsapp.com",
 ]
 
+
 # ============================================================
-# 🔖 CONSTANTS
+# 🔖 CONSTANTS / ENUMS
 # ============================================================
 class RStatus(str, Enum):
     NEW = "NEW"
@@ -208,7 +187,7 @@ def render_template(text: str, **vars: Any) -> str:
         return out
         
 # ============================================================
-# 🗄️ DATABASE
+# 🗄️ DATABASE - SCHEMA
 # ============================================================
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -294,6 +273,9 @@ CREATE TABLE IF NOT EXISTS buttons_config (
 """
 
 
+# ============================================================
+# 🗄️ DATABASE - DEFAULTS
+# ============================================================
 DEFAULT_TYPES = [
     ("حظر حساب", "طلب مراجعة لحساب محظور",
      "مرحبًا،\nأرغب في طلب مراجعة للحساب المرتبط بالرقم:\n{phone}\n\n"
@@ -356,7 +338,7 @@ def db_init() -> None:
     with closing(db_connect()) as conn:
         conn.executescript(SCHEMA)
         
-        # إضافة أنواع المشاكل الافتراضية
+        # أنواع المشاكل الافتراضية
         cur = conn.execute("SELECT COUNT(*) AS c FROM request_types")
         if cur.fetchone()["c"] == 0:
             for name, desc, tmpl, pos in DEFAULT_TYPES:
@@ -371,17 +353,16 @@ def db_init() -> None:
                     (tid, tmpl, now().isoformat()),
                 )
         
-        # إضافة الإعدادات الافتراضية
+        # الإعدادات الافتراضية
         for k, v in DEFAULT_SETTINGS.items():
             conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (k, v))
         
-        # إضافة كلمات الرد
         conn.execute(
             "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)",
             ("response_keywords", json.dumps(DEFAULT_RESPONSE_KEYWORDS, ensure_ascii=False)),
         )
         
-        # إضافة الأدمن
+        # الأدمن
         for a in ADMIN_IDS:
             conn.execute(
                 "INSERT OR IGNORE INTO admins(telegram_id, role, added_at) VALUES (?,?,?)",
@@ -393,7 +374,7 @@ def db_init() -> None:
                 (a, "SUPER_ADMIN", now().isoformat()),
             )
         
-        # إضافة الأزرار الافتراضية
+        # الأزرار الافتراضية
         for key, label, pos in DEFAULT_BUTTONS:
             conn.execute(
                 "INSERT OR IGNORE INTO buttons_config(button_key, label, position) VALUES (?,?,?)",
@@ -403,7 +384,7 @@ def db_init() -> None:
         conn.commit()
 
 
-# تنفيذ فوري عند بدء البرنامج
+# تنفيذ فوري
 try:
     db_init()
     log.info("✅ قاعدة البيانات جاهزة")
@@ -503,33 +484,47 @@ def is_super(tg_id: int) -> bool:
     return get_admin_role(tg_id) == "SUPER_ADMIN"
     
 # ============================================================
-# 📧 EMAIL SENDER
+# 📧 EMAIL SENDER (Resend API)
 # ============================================================
 def send_support_email(subject: str, body: str) -> dict:
     """
-    يبعت الإيميلات للستة عناوين (واتساب).
-    كل مرة يستخدم إيميل عشوائي من SENDER_EMAILS.
-    يرجع: {"sent": عدد الناجح, "failed": عدد الفاشل, "details": [...]}
+    يبعت الإيميلات للستة عناوين عبر Resend API.
+    Resend يعمل مع Render Free (بلا SMTP).
     """
-    sender = random.choice(SENDER_EMAILS)
     results = {"sent": 0, "failed": 0, "details": []}
+
+    if not RESEND_API_KEY:
+        log.error("❌ RESEND_API_KEY غير مضبوط")
+        return {"sent": 0, "failed": 6, "details": ["❌ لا يوجد API Key"]}
 
     for to_email in WHATSAPP_EMAILS:
         try:
-            msg = MIMEMultipart()
-            msg['From'] = sender['email']
-            msg['To'] = to_email
-            msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": RESEND_FROM,
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=10,
+            )
 
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
-                server.login(sender['email'], sender['password'].replace(' ', ''))
-                server.send_message(msg)
+            if response.status_code in (200, 201):
+                results["sent"] += 1
+                results["details"].append(f"✅ {to_email}")
+                log.info(f"✅ Resend → {to_email}")
+            else:
+                results["failed"] += 1
+                error_msg = response.text[:80]
+                results["details"].append(f"❌ {to_email}: {error_msg}")
+                log.error(f"❌ {to_email}: {error_msg}")
 
-            results["sent"] += 1
-            results["details"].append(f"✅ {to_email}")
-            log.info(f"✅ {sender['email']} → {to_email}")
-            time.sleep(1)
+            time.sleep(0.5)
 
         except Exception as e:
             results["failed"] += 1
@@ -544,10 +539,7 @@ def send_support_email(subject: str, body: str) -> dict:
 # 🔌 CONNECTOR (Adapter للربط الرسمي)
 # ============================================================
 class OfficialSupportConnector:
-    """
-    Adapter جاهز للربط بقناة دعم رسمية.
-    حالياً في وضع not_configured (ما يعمل شي).
-    """
+    """Adapter جاهز للربط بقناة دعم رسمية"""
 
     MODE_NOT_CONFIGURED = "not_configured"
     MODE_MANUAL = "manual"
@@ -914,7 +906,7 @@ async def btn_help(m: Message):
 
 
 # ============================================================
-# 👤 USER HANDLERS - Callback
+# 👤 USER HANDLERS - Callbacks
 # ============================================================
 @router.callback_query(F.data == "menu:main")
 async def cb_main(cb: CallbackQuery, state: FSMContext):
@@ -950,7 +942,7 @@ async def cb_noop(cb: CallbackQuery):
 
 
 # ============================================================
-# 📝 REQUEST SYSTEM
+# 📝 REQUEST SYSTEM - اختيار نوع المشكلة
 # ============================================================
 @router.callback_query(F.data.startswith("rt:"))
 async def cb_choose_type(cb: CallbackQuery, state: FSMContext):
@@ -970,6 +962,9 @@ async def cb_choose_type(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+# ============================================================
+# 📝 REQUEST SYSTEM - استلام رقم الهاتف
+# ============================================================
 @router.message(Flow.phone)
 async def on_phone(m: Message, state: FSMContext):
     raw = m.text or ""
@@ -1000,7 +995,7 @@ async def on_phone(m: Message, state: FSMContext):
     correlation_id = str(uuid.uuid4())
     ts = now().isoformat()
 
-    # بناء الرسالة
+    # بناء الرسالة من القالب
     message = build_request_message(
         req_type,
         phone=phone,
@@ -1054,13 +1049,13 @@ async def cb_req_cancel(cb: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# 📧 SEND REQUEST (الإيميل للشركة)
+# 📧 SEND REQUEST (Resend API)
 # ============================================================
 async def try_send_request(code: str,
                            notify_user_chat_id: int | None = None,
                            silent: bool = False) -> None:
     """
-    يرسل الطلب للشركة عبر الإيميل.
+    يرسل الطلب للشركة عبر Resend API.
     محمي بـ try/except كامل — لا يتوقف البوت أبداً.
     """
     try:
@@ -1104,7 +1099,7 @@ async def try_send_request(code: str,
             f"Al-Mutri Support Team"
         )
 
-        # إرسال الإيميل (داخل try منفصل)
+        # إرسال الإيميل
         sent_count = 0
         try:
             result = send_support_email(subject, body)
@@ -1159,7 +1154,6 @@ async def try_send_request(code: str,
             )
             log_event(None, "REQUEST_SEND_FAILED", code, "no emails sent")
 
-            # إشعار المستخدم بالفشل
             if notify_user_chat_id:
                 try:
                     await bot.send_message(
@@ -1173,7 +1167,6 @@ async def try_send_request(code: str,
                     log.warning(f"⚠️ فشل إشعار الفشل: {e}")
 
     except Exception as outer_err:
-        # حماية خارجية — لأي خطأ غير متوقع
         log.exception(f"❌ try_send_request crashed: {outer_err}")
         try:
             db_exec(
@@ -1182,7 +1175,7 @@ async def try_send_request(code: str,
             )
         except Exception:
             pass
-            
+           
 # ============================================================
 # 🗂 MY REQUESTS (Pagination)
 # ============================================================
@@ -1422,13 +1415,10 @@ async def cb_adm_filter(cb: CallbackQuery):
 
 
 # ============================================================
-# 📋 ADMIN - OPEN REQUEST (عرض تفاصيل)
+# 📋 ADMIN - OPEN REQUEST
 # ============================================================
 async def show_request_card(target: Message, code: str):
-    """
-    دالة مساعدة لعرض تفاصيل الطلب.
-    تقبل Message — عشان تعمل مع كل الحالات.
-    """
+    """دالة مساعدة لعرض تفاصيل الطلب"""
     r = db_one(
         "SELECT r.*, u.telegram_id AS tg_id, u.first_name AS fname, u.username AS uname "
         "FROM requests r JOIN users u ON u.id=r.user_id WHERE r.code=?",
@@ -1466,7 +1456,6 @@ async def cb_adm_open(cb: CallbackQuery):
         await cb.answer("غير موجود", show_alert=True)
         return
 
-    # إرسال رسالة جديدة (مو تعديل)
     await show_request_card(cb.message, code)
     await cb.answer()
 
@@ -1530,7 +1519,6 @@ async def cb_adm_setst(cb: CallbackQuery):
         except TelegramAPIError:
             pass
 
-    # عرض البطاقة المحدثة
     await show_request_card(cb.message, r["code"])
 
 
@@ -1721,7 +1709,7 @@ async def on_sim_reply(m: Message, state: FSMContext):
 
 
 # ============================================================
-# 🗂 ADMIN - TYPES (Show Menu Helper)
+# 🗂 ADMIN - TYPES (Show Menu)
 # ============================================================
 async def show_types_menu(target: Message):
     """دالة مساعدة لعرض قائمة أنواع المشاكل"""
@@ -1847,7 +1835,7 @@ async def on_add_type_template(m: Message, state: FSMContext):
 
 
 # ============================================================
-# 🗂 ADMIN - TYPES (Edit)
+# 🗂 ADMIN - TYPES (Edit Name)
 # ============================================================
 @router.callback_query(F.data.startswith("adm:tedit:"))
 async def cb_adm_tedit(cb: CallbackQuery, state: FSMContext):
@@ -1885,7 +1873,7 @@ async def on_edit_type_name(m: Message, state: FSMContext):
 
 
 # ============================================================
-# 📝 ADMIN - TEMPLATES
+# 📝 ADMIN - TEMPLATES (List)
 # ============================================================
 @router.message(F.text == "📝 القوالب")
 async def btn_templates(m: Message):
@@ -1924,6 +1912,9 @@ async def cb_adm_templates(cb: CallbackQuery):
     await cb.answer()
 
 
+# ============================================================
+# 📝 ADMIN - TEMPLATES (View / Edit)
+# ============================================================
 @router.callback_query(F.data.startswith("adm:tpl:"))
 async def cb_adm_tpl(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
@@ -2289,7 +2280,8 @@ async def cb_adm_logs(cb: CallbackQuery):
 
     await edit_or_send(cb, "\n".join(lines), back_kb("adm:panel"))
     await cb.answer()
-    
+
+
 # ============================================================
 # ⚙️ ADMIN - SETTINGS
 # ============================================================
@@ -2395,10 +2387,9 @@ async def on_edit_welcome(m: Message, state: FSMContext):
     set_setting("welcome_message", new_text)
     await m.answer("✅ تم التحديث.", reply_markup=admin_panel_kb())
     await state.clear()
-
-
+    
 # ============================================================
-# 🗄 ADMIN - BACKUP / EXPORT
+# 🗄 ADMIN - BACKUP
 # ============================================================
 @router.callback_query(F.data == "adm:backup")
 async def cb_adm_backup(cb: CallbackQuery):
@@ -2425,6 +2416,9 @@ async def cb_adm_backup(cb: CallbackQuery):
         await cb.answer("فشل النسخ", show_alert=True)
 
 
+# ============================================================
+# 📤 ADMIN - EXPORT CSV
+# ============================================================
 @router.callback_query(F.data == "adm:export_csv")
 async def cb_adm_export_csv(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
@@ -2554,6 +2548,12 @@ async def on_startup() -> None:
     me = await bot.get_me()
     log.info(f"✅ Bot started as @{me.username}")
     log.info(f"👑 Admins: {', '.join(str(a) for a in ADMIN_IDS)}")
+
+    # تحقق من RESEND_API_KEY
+    if not RESEND_API_KEY:
+        log.warning("⚠️ RESEND_API_KEY غير مضبوط - الإيميلات ما راح ترسل")
+    else:
+        log.info("✅ RESEND_API_KEY مضبوط")
 
     # إشعار الأدمن
     for a in (ADMIN_IDS | SUPER_ADMIN_IDS):
