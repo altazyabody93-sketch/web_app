@@ -419,7 +419,226 @@ def upsert_user(tg_user) -> sqlite3.Row:
             (tg_user.id, tg_user.username, tg_user.first_name, ts, ts),
         )
     return db_one("SELECT * FROM users WHERE telegram_id=?", (tg_user.id,))
-    
+# ============================
+# HELPERS
+# ============================
+_last_call: dict[int, float] = {}
+
+
+def throttled(user_id: int) -> bool:
+    t = time.time()
+    last = _last_call.get(user_id, 0)
+    if t - last < RATE_LIMIT_SECONDS:
+        return True
+    _last_call[user_id] = t
+    return False
+
+
+def render_template(text: str, **vars: Any) -> str:
+    safe = {k: ("" if v is None else str(v)) for k, v in vars.items()}
+    try:
+        return text.format(**safe)
+    except Exception:
+        out = text
+        for k, v in safe.items():
+            out = out.replace("{" + k + "}", v)
+        return out
+
+
+def status_ar(s: str) -> str:
+    try:
+        return STATUS_AR[RStatus(s)]
+    except Exception:
+        return s
+
+
+def get_admin_role(tg_id: int) -> Optional[str]:
+    if tg_id in SUPER_ADMIN_IDS:
+        return "SUPER_ADMIN"
+    if tg_id in ADMIN_IDS:
+        return "ADMIN"
+    row = db_one("SELECT role FROM admins WHERE telegram_id=?", (tg_id,))
+    return row["role"] if row else None
+
+
+def is_admin(tg_id: int) -> bool:
+    return get_admin_role(tg_id) is not None
+
+
+def is_super(tg_id: int) -> bool:
+    return get_admin_role(tg_id) == "SUPER_ADMIN"
+
+
+# ============================
+# TEMPLATE SYSTEM
+# ============================
+def build_request_message(req_type: sqlite3.Row, *, phone: str, request_id: str,
+                          user_id: int, username: str, first_name: str) -> str:
+    body = req_type["template"]
+    tmpl = db_one("SELECT body FROM message_templates WHERE type_id=? ORDER BY id DESC LIMIT 1",
+                  (req_type["id"],))
+    if tmpl:
+        body = tmpl["body"]
+    return render_template(
+        body,
+        phone=phone,
+        request_id=request_id,
+        user_id=user_id,
+        username=username or "",
+        first_name=first_name or "",
+        request_type=req_type["name"],
+        created_at=now().strftime("%Y-%m-%d %H:%M"),
+    )
+
+
+# ============================
+# CONNECTOR
+# ============================
+class OfficialSupportConnector:
+    MODE_NOT_CONFIGURED = "not_configured"
+    MODE_MANUAL = "manual"
+    MODE_API = "api"
+
+    def __init__(self) -> None:
+        self.mode = get_setting("CONNECTOR_MODE", self.MODE_NOT_CONFIGURED)
+
+    def refresh(self) -> None:
+        self.mode = get_setting("CONNECTOR_MODE", self.MODE_NOT_CONFIGURED)
+
+    async def send_request(self, request_row: sqlite3.Row, message: str) -> dict:
+        self.refresh()
+        correlation_id = request_row["correlation_id"] or str(uuid.uuid4())
+        return {
+            "ok": False,
+            "status": "NOT_CONFIGURED",
+            "external_message_id": None,
+            "external_thread_id": None,
+            "correlation_id": correlation_id,
+            "error": "قناة الدعم غير مهيأة",
+        }
+
+    async def check_status(self, request_row: sqlite3.Row) -> dict:
+        self.refresh()
+        if self.mode == self.MODE_NOT_CONFIGURED:
+            return {"ok": False, "status": "NOT_CONFIGURED"}
+        return {"ok": True, "status": "WAITING_REPLY"}
+
+    async def process_incoming_response(self, payload: dict) -> dict:
+        corr = payload.get("correlation_id")
+        ext_msg = payload.get("external_message_id")
+        ext_thread = payload.get("external_thread_id")
+        text = payload.get("text") or ""
+
+        row = None
+        if corr:
+            row = db_one("SELECT * FROM requests WHERE correlation_id=?", (corr,))
+        if not row and ext_msg:
+            row = db_one("SELECT * FROM requests WHERE external_message_id=?", (ext_msg,))
+        if not row and ext_thread:
+            row = db_one("SELECT * FROM requests WHERE external_thread_id=?", (ext_thread,))
+
+        if not row:
+            return {"ok": False, "request_code": None, "reply_text": None,
+                    "error": "لا يوجد طلب مطابق"}
+
+        db_exec(
+            "UPDATE requests SET reply_text=?, status=?, updated_at=? WHERE id=?",
+            (text, RStatus.REPLY_RECEIVED.value, now().isoformat(), row["id"]),
+        )
+        db_exec(
+            "INSERT INTO request_events(request_id, event, details, created_at) VALUES (?,?,?,?)",
+            (row["id"], "REPLY_RECEIVED", text[:500], now().isoformat()),
+        )
+        return {"ok": True, "request_code": row["code"], "reply_text": text, "error": None}
+
+
+CONNECTOR = OfficialSupportConnector()
+
+
+# ============================
+# RESPONSE PROCESSOR
+# ============================
+def analyze_reply(text: str) -> Optional[str]:
+    if not text:
+        return None
+    raw = get_setting("response_keywords", "{}")
+    try:
+        kws = json.loads(raw)
+    except Exception:
+        kws = DEFAULT_RESPONSE_KEYWORDS
+
+    low = text.lower()
+    if any(k.lower() in low for k in kws.get("resolved_keywords", [])):
+        return RStatus.RESOLVED.value
+    if any(k.lower() in low for k in kws.get("rejected_keywords", [])):
+        return RStatus.CLOSED.value
+    if any(k.lower() in low for k in kws.get("pending_keywords", [])):
+        return RStatus.WAITING_REPLY.value
+    return None
+
+
+async def handle_incoming_reply(payload: dict) -> None:
+    res = await CONNECTOR.process_incoming_response(payload)
+    if not res["ok"]:
+        log.warning("incoming reply not matched: %s", res.get("error"))
+        return
+    code = res["request_code"]
+    text = res["reply_text"] or ""
+
+    suggested = analyze_reply(text)
+    if suggested:
+        db_exec("UPDATE requests SET status=?, updated_at=? WHERE code=?",
+                (suggested, now().isoformat(), code))
+        log_event(None, "STATUS_CHANGE", code, f"REPLY -> {suggested}")
+
+    row = db_one(
+        "SELECT r.*, u.telegram_id AS tg_id FROM requests r "
+        "JOIN users u ON u.id=r.user_id WHERE r.code=?",
+        (code,),
+    )
+    if not row:
+        return
+
+    await notify_admins(
+        f"{divider()}\n"
+        f"📨 <b>وصل رد جديد</b>\n"
+        f"{divider()}\n\n"
+        f"📋 الطلب: <code>{code}</code>\n"
+        f"👤 المستخدم: <code>{row['phone']}</code>\n\n"
+        f"💬 <b>نص الرد:</b>\n{text[:400] or '—'}"
+    )
+
+    if get_setting("AUTO_REPLY", "1") == "1":
+        quote = random_quote()
+        emoji = random_emoji()
+
+        user_msg = (
+            f"{divider()}\n"
+            f"{emoji} <b>خبر سار!</b> {emoji}\n"
+            f"{divider()}\n\n"
+            f"📋 <b>طلبك:</b> <code>{row['code']}</code>\n"
+            f"📱 <b>الرقم:</b> <code>{mask_phone(row['phone'])}</code>\n"
+            f"📊 <b>الحالة:</b> {status_ar(row['status'])}\n\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"📨 <b>رد الجهة:</b>\n"
+            f"{text or '—'}\n"
+            f"━━━━━━━━━━━━━━━━\n\n"
+            f"<i>{quote}</i>\n\n"
+            f"{divider()}"
+        )
+
+        try:
+            await bot.send_message(
+                row["tg_id"], user_msg,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0")],
+                    [InlineKeyboardButton(text="‹ القائمة الرئيسية", callback_data="menu:main")],
+                ]),
+            )
+        except TelegramAPIError as e:
+            log.warning("notify user failed: %s", e)
+
+
 # ============================
 # KEYBOARDS
 # ============================
