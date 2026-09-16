@@ -8,13 +8,17 @@ import csv
 import json
 import logging
 import os
+import random
 import re
 import shutil
+import smtplib
 import sqlite3
 import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -28,29 +32,28 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, BotCommand,
     FSInputFile,
 )
 
 
 # ============================
-# CONFIG  ← عدّل هذا القسم فقط
+# CONFIG
 # ============================
-BOT_TOKEN = "8247238031:AAGIIHhPYAuJCxdRzNWVdchYE5U7leGbmrA"                    # ← ضع توكن البوت هنا
-ADMIN_IDS = {7325566792}                   # ← ضع Telegram ID الخاص بك
-SUPER_ADMIN_IDS = {7602226699}             # ← ضع نفس ID (أو أعلى صلاحية)
+BOT_TOKEN = "8247238031:AAGIIHhPYAuJCxdRzNWVdchYE5U7leGbmrA"
+ADMIN_IDS = {7325566792}
+SUPER_ADMIN_IDS = {7602226699}
 
-# إعدادات ثابتة (لا تحتاج تعديل)
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "matary.db")
 LOG_LEVEL = "INFO"
 BOT_NAME = "المطري دعم"
 RATE_LIMIT_SECONDS = 1
 BACKUP_DIR = "backups"
 
-# تحقق
 if not BOT_TOKEN or ":" not in BOT_TOKEN:
-    raise SystemExit("❌ ضع BOT_TOKEN داخل main.py في قسم CONFIG")
+    raise SystemExit("❌ ضع BOT_TOKEN")
 if not ADMIN_IDS or 0 in ADMIN_IDS:
-    raise SystemExit("❌ ضع Telegram ID في ADMIN_IDS داخل main.py")
+    raise SystemExit("❌ ضع ADMIN_IDS")
 
 Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -60,6 +63,25 @@ logging.basicConfig(
 )
 logging.getLogger("aiogram").setLevel(logging.WARNING)
 log = logging.getLogger("matary")
+
+
+# ============================
+# EMAIL
+# ============================
+SENDER_EMAILS = [
+    {"email": "altazyabody93@gmail.com",   "password": "xxxx xxxx xxxx xxxx"},
+    {"email": "altazyabody9999@gmail.com", "password": "xxxx xxxx xxxx xxxx"},
+    {"email": "altazyabody733@gmail.com",  "password": "xxxx xxxx xxxx xxxx"},
+]
+
+WHATSAPP_EMAILS = [
+    "1979975992710010@support.whatsapp.com",
+    "support@whatsapp.com",
+    "support@support.whatsapp.com",
+    "android@support.whatsapp.com",
+    "ios@support.whatsapp.com",
+    "web@support.whatsapp.com",
+]
 
 
 # ============================
@@ -91,6 +113,29 @@ STATUS_AR = {
 
 PHONE_RE = re.compile(r"^\+\d{8,15}$")
 CODE_RE = re.compile(r"^MTR-\d{6}$")
+
+# اقتباسات عشوائية
+REPLY_QUOTES = [
+    "✨ وصلنا الرد، ونحن نهتم بك 💙",
+    "🎯 خطوة بخطوة، ونحن معك",
+    "💎 لا تقلق، الأمر تحت السيطرة",
+    "🚀 وصل رد جديد، تابعنا",
+    "🌟 نحن معك حتى النهاية",
+    "🔥 كل ثانية نقترب من الحل",
+    "💚 اطمئن، فريقنا يعمل الآن",
+    "🎉 أخبار جيدة قادمة",
+]
+
+WELCOME_ANIMATIONS = [
+    "🌟",
+    "✨",
+    "💫",
+    "⭐",
+    "🌠",
+    "🎇",
+    "🌈",
+    "💎",
+]
 
 
 def now() -> datetime:
@@ -124,6 +169,14 @@ def is_valid_phone(s: str) -> bool:
 
 def norm_phone(s: str) -> str:
     return s.strip().replace(" ", "").replace("-", "")
+
+
+def random_quote() -> str:
+    return random.choice(REPLY_QUOTES)
+
+
+def random_emoji() -> str:
+    return random.choice(WELCOME_ANIMATIONS)
 
 
 # ============================
@@ -203,6 +256,13 @@ CREATE TABLE IF NOT EXISTS logs (
     details TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS buttons_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    button_key TEXT UNIQUE NOT NULL,
+    label TEXT NOT NULL,
+    position INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1
+);
 """
 
 DEFAULT_TYPES = [
@@ -232,6 +292,8 @@ DEFAULT_SETTINGS = {
     "MAX_RETRIES": "3",
     "RATE_LIMIT": str(RATE_LIMIT_SECONDS),
     "CONNECTOR_MODE": "not_configured",
+    "welcome_message": "🌟 أهلاً وسهلاً بك في <b>المطري دعم</b> 🌟",
+    "show_admin_button": "1",
 }
 
 DEFAULT_RESPONSE_KEYWORDS = {
@@ -239,6 +301,13 @@ DEFAULT_RESPONSE_KEYWORDS = {
     "pending_keywords": ["pending", "review", "قيد المراجعة", "بانتظار"],
     "rejected_keywords": ["rejected", "denied", "مرفوض", "رفض"],
 }
+
+DEFAULT_BUTTONS = [
+    ("new_request", "📩 طلب جديد", 10),
+    ("my_requests", "📋 طلباتي", 20),
+    ("help", "🆘 المساعدة", 30),
+    ("admin_panel", "⚙️ لوحة التحكم", 40),
+]
 
 
 def db_connect() -> sqlite3.Connection:
@@ -281,10 +350,14 @@ def db_init() -> None:
                 "INSERT OR REPLACE INTO admins(telegram_id, role, added_at) VALUES (?,?,?)",
                 (a, "SUPER_ADMIN", now().isoformat()),
             )
+        for key, label, pos in DEFAULT_BUTTONS:
+            conn.execute(
+                "INSERT OR IGNORE INTO buttons_config(button_key, label, position) VALUES (?,?,?)",
+                (key, label, pos),
+            )
         conn.commit()
 
 
-# ✅ تنفيذ فوري عند بدء البرنامج
 try:
     db_init()
 except Exception as _e:
@@ -346,255 +419,54 @@ def upsert_user(tg_user) -> sqlite3.Row:
             (tg_user.id, tg_user.username, tg_user.first_name, ts, ts),
         )
     return db_one("SELECT * FROM users WHERE telegram_id=?", (tg_user.id,))
-
-
-# ============================
-# HELPERS
-# ============================
-_last_call: dict[int, float] = {}
-
-
-def throttled(user_id: int) -> bool:
-    t = time.time()
-    last = _last_call.get(user_id, 0)
-    if t - last < RATE_LIMIT_SECONDS:
-        return True
-    _last_call[user_id] = t
-    return False
-
-
-def render_template(text: str, **vars: Any) -> str:
-    safe = {k: ("" if v is None else str(v)) for k, v in vars.items()}
-    try:
-        return text.format(**safe)
-    except Exception:
-        out = text
-        for k, v in safe.items():
-            out = out.replace("{" + k + "}", v)
-        return out
-
-
-def status_ar(s: str) -> str:
-    try:
-        return STATUS_AR[RStatus(s)]
-    except Exception:
-        return s
-
-
-def get_admin_role(tg_id: int) -> Optional[str]:
-    if tg_id in SUPER_ADMIN_IDS:
-        return "SUPER_ADMIN"
-    if tg_id in ADMIN_IDS:
-        return "ADMIN"
-    row = db_one("SELECT role FROM admins WHERE telegram_id=?", (tg_id,))
-    return row["role"] if row else None
-
-
-def is_admin(tg_id: int) -> bool:
-    return get_admin_role(tg_id) is not None
-
-
-def is_super(tg_id: int) -> bool:
-    return get_admin_role(tg_id) == "SUPER_ADMIN"
-
-
-# ============================
-# TEMPLATE SYSTEM
-# ============================
-def build_request_message(req_type: sqlite3.Row, *, phone: str, request_id: str,
-                          user_id: int, username: str, first_name: str) -> str:
-    body = req_type["template"]
-    tmpl = db_one("SELECT body FROM message_templates WHERE type_id=? ORDER BY id DESC LIMIT 1",
-                  (req_type["id"],))
-    if tmpl:
-        body = tmpl["body"]
-    return render_template(
-        body,
-        phone=phone,
-        request_id=request_id,
-        user_id=user_id,
-        username=username or "",
-        first_name=first_name or "",
-        request_type=req_type["name"],
-        created_at=now().strftime("%Y-%m-%d %H:%M"),
-    )
-
-
-# ============================
-# CONNECTOR (Official Adapter)
-# ============================
-class OfficialSupportConnector:
-    """
-    Adapter جاهز للربط بقناة دعم رسمية ومصرّح بها.
-
-    - في الوضع الافتراضي (not_configured): لا يفعل شيئًا ويعيد NOT_CONFIGURED.
-    - يمكن ربطه بـ WhatsApp Business Cloud API الرسمي من Meta، أو أي API رسمي آخر.
-    - ⚠️ لا يستخدم أي طريقة غير رسمية، ولا أي WhatsApp Web automation.
-    """
-
-    MODE_NOT_CONFIGURED = "not_configured"
-    MODE_MANUAL = "manual"
-    MODE_API = "api"
-
-    def __init__(self) -> None:
-        self.mode = get_setting("CONNECTOR_MODE", self.MODE_NOT_CONFIGURED)
-
-    def refresh(self) -> None:
-        self.mode = get_setting("CONNECTOR_MODE", self.MODE_NOT_CONFIGURED)
-
-    async def send_request(self, request_row: sqlite3.Row, message: str) -> dict:
-        self.refresh()
-        correlation_id = request_row["correlation_id"] or str(uuid.uuid4())
-
-        if self.mode == self.MODE_NOT_CONFIGURED:
-            return {
-                "ok": False,
-                "status": "NOT_CONFIGURED",
-                "external_message_id": None,
-                "external_thread_id": None,
-                "correlation_id": correlation_id,
-                "error": "قناة الدعم غير مهيأة",
-            }
-
-        if self.mode == self.MODE_MANUAL:
-            return {
-                "ok": True,
-                "status": "SENT",
-                "external_message_id": f"manual-{correlation_id[:8]}",
-                "external_thread_id": None,
-                "correlation_id": correlation_id,
-                "error": None,
-            }
-
-        if self.mode == self.MODE_API:
-            # TODO: اربط هنا بـ API الرسمي
-            return {
-                "ok": False,
-                "status": "NOT_CONFIGURED",
-                "external_message_id": None,
-                "external_thread_id": None,
-                "correlation_id": correlation_id,
-                "error": "API الرسمي غير مربوط بعد",
-            }
-
-        return {
-            "ok": False,
-            "status": "NOT_CONFIGURED",
-            "external_message_id": None,
-            "external_thread_id": None,
-            "correlation_id": correlation_id,
-            "error": f"وضع غير معروف: {self.mode}",
-        }
-
-    async def check_status(self, request_row: sqlite3.Row) -> dict:
-        self.refresh()
-        if self.mode == self.MODE_NOT_CONFIGURED:
-            return {"ok": False, "status": "NOT_CONFIGURED"}
-        return {"ok": True, "status": "WAITING_REPLY"}
-
-    async def process_incoming_response(self, payload: dict) -> dict:
-        corr = payload.get("correlation_id")
-        ext_msg = payload.get("external_message_id")
-        ext_thread = payload.get("external_thread_id")
-        text = payload.get("text") or ""
-
-        row = None
-        if corr:
-            row = db_one("SELECT * FROM requests WHERE correlation_id=?", (corr,))
-        if not row and ext_msg:
-            row = db_one("SELECT * FROM requests WHERE external_message_id=?", (ext_msg,))
-        if not row and ext_thread:
-            row = db_one("SELECT * FROM requests WHERE external_thread_id=?", (ext_thread,))
-
-        if not row:
-            return {"ok": False, "request_code": None, "reply_text": None,
-                    "error": "لا يوجد طلب مطابق"}
-
-        db_exec(
-            "UPDATE requests SET reply_text=?, status=?, updated_at=? WHERE id=?",
-            (text, RStatus.REPLY_RECEIVED.value, now().isoformat(), row["id"]),
-        )
-        db_exec(
-            "INSERT INTO request_events(request_id, event, details, created_at) VALUES (?,?,?,?)",
-            (row["id"], "REPLY_RECEIVED", text[:500], now().isoformat()),
-        )
-        return {"ok": True, "request_code": row["code"], "reply_text": text, "error": None}
-
-
-CONNECTOR = OfficialSupportConnector()
-
-
-# ============================
-# RESPONSE PROCESSOR
-# ============================
-def analyze_reply(text: str) -> Optional[str]:
-    if not text:
-        return None
-    raw = get_setting("response_keywords", "{}")
-    try:
-        kws = json.loads(raw)
-    except Exception:
-        kws = DEFAULT_RESPONSE_KEYWORDS
-
-    low = text.lower()
-    if any(k.lower() in low for k in kws.get("resolved_keywords", [])):
-        return RStatus.RESOLVED.value
-    if any(k.lower() in low for k in kws.get("rejected_keywords", [])):
-        return RStatus.CLOSED.value
-    if any(k.lower() in low for k in kws.get("pending_keywords", [])):
-        return RStatus.WAITING_REPLY.value
-    return None
-
-
-async def handle_incoming_reply(payload: dict) -> None:
-    res = await CONNECTOR.process_incoming_response(payload)
-    if not res["ok"]:
-        log.warning("incoming reply not matched: %s", res.get("error"))
-        return
-    code = res["request_code"]
-    text = res["reply_text"] or ""
-
-    suggested = analyze_reply(text)
-    if suggested:
-        db_exec("UPDATE requests SET status=?, updated_at=? WHERE code=?",
-                (suggested, now().isoformat(), code))
-        log_event(None, "STATUS_CHANGE", code, f"REPLY -> {suggested}")
-
-    row = db_one(
-        "SELECT r.*, u.telegram_id AS tg_id FROM requests r JOIN users u ON u.id=r.user_id WHERE r.code=?",
-        (code,),
-    )
-    if row and get_setting("AUTO_REPLY", "1") == "1":
-        user_msg = (
-            f"{divider()}\n<b>تحديث طلبك</b>\n{divider()}\n\n"
-            f"رقم الطلب: <code>{row['code']}</code>\n"
-            f"الرقم: <code>{mask_phone(row['phone'])}</code>\n"
-            f"الحالة: {status_ar(row['status'])}\n\n"
-            f"رد الجهة:\n{text or '—'}"
-        )
-        try:
-            await bot.send_message(row["tg_id"], user_msg,
-                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                       [InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0")],
-                                       [InlineKeyboardButton(text="‹ القائمة الرئيسية", callback_data="menu:main")],
-                                   ]))
-        except TelegramAPIError as e:
-            log.warning("notify user failed: %s", e)
-
-    await notify_admins(
-        f"📨 <b>وصل رد جديد</b>\nالطلب: <code>{code}</code>\nالنص:\n{text[:400]}"
-    )
-
-
+    
 # ============================
 # KEYBOARDS
 # ============================
+def get_buttons_config() -> list:
+    """يرجع الأزرار مرتبة من قاعدة البيانات"""
+    return db_all(
+        "SELECT button_key, label, position, enabled FROM buttons_config "
+        "WHERE enabled=1 ORDER BY position ASC, id ASC"
+    )
+
+
 def main_menu_kb() -> InlineKeyboardMarkup:
+    """القائمة الرئيسية (Inline)"""
     rows = db_all("SELECT id, name FROM request_types WHERE enabled=1 ORDER BY id")
     kb = [[InlineKeyboardButton(text=f"📩 {r['name']}", callback_data=f"rt:{r['id']}")] for r in rows]
-    kb.append([InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0"),
-               InlineKeyboardButton(text="🆘 المساعدة", callback_data="help")])
+    kb.append([
+        InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0"),
+        InlineKeyboardButton(text="🆘 المساعدة", callback_data="help"),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def reply_menu_kb(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
+    """القائمة السفلية (Reply) — فيها زر لوحة التحكم"""
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📩 طلب جديد")],
+            [KeyboardButton(text="📋 طلباتي"), KeyboardButton(text="🆘 المساعدة")],
+        ],
+        resize_keyboard=True,
+    )
+    if is_admin_user:
+        kb.keyboard.append([KeyboardButton(text="⚙️ لوحة التحكم")])
+    return kb
+
+
+def admin_reply_kb() -> ReplyKeyboardMarkup:
+    """قائمة الأدمن السفلية"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📋 الطلبات"), KeyboardButton(text="📊 الإحصائيات")],
+            [KeyboardButton(text="👤 المستخدمون"), KeyboardButton(text="⚙️ الإعدادات")],
+            [KeyboardButton(text="🎨 تخصيص الأزرار"), KeyboardButton(text="📝 القوالب")],
+            [KeyboardButton(text="🔙 رجوع للقائمة الرئيسية")],
+        ],
+        resize_keyboard=True,
+    )
 
 
 def back_kb(target: str = "menu:main", label: str = "‹ رجوع") -> InlineKeyboardMarkup:
@@ -609,6 +481,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="📊 الإحصائيات", callback_data="adm:stats")],
         [InlineKeyboardButton(text="👤 المستخدمون", callback_data="adm:users"),
          InlineKeyboardButton(text="📜 السجل", callback_data="adm:logs")],
+        [InlineKeyboardButton(text="🎨 تخصيص الأزرار", callback_data="adm:buttons_config")],
         [InlineKeyboardButton(text="⚙ الإعدادات", callback_data="adm:settings"),
          InlineKeyboardButton(text="🗄 Backup", callback_data="adm:backup")],
         [InlineKeyboardButton(text="📤 تصدير CSV", callback_data="adm:export_csv")],
@@ -639,10 +512,41 @@ def request_admin_kb(req_id: int) -> InlineKeyboardMarkup:
 
 
 # ============================
+# EMAIL SENDER
+# ============================
+def send_support_email(subject: str, body: str) -> dict:
+    """يبعت الإيميلات للستة عناوين، من إيميل عشوائي"""
+    sender = random.choice(SENDER_EMAILS)
+    results = {"sent": 0, "failed": 0}
+
+    for to_email in WHATSAPP_EMAILS:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = sender['email']
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
+                server.login(sender['email'], sender['password'].replace(' ', ''))
+                server.send_message(msg)
+
+            results["sent"] += 1
+            log.info(f"✅ {sender['email']} → {to_email}")
+            time.sleep(1)
+        except Exception as e:
+            results["failed"] += 1
+            log.error(f"❌ {to_email}: {e}")
+
+    return results
+
+
+# ============================
 # FSM STATES
 # ============================
 class Flow(StatesGroup):
     phone = State()
+    confirm = State()
 
 
 class AdminFlow(StatesGroup):
@@ -656,6 +560,9 @@ class AdminFlow(StatesGroup):
     req_note = State()
     req_msg = State()
     sim_reply = State()
+    edit_button_label = State()
+    edit_button_position = State()
+    edit_welcome = State()
 
 
 # ============================
@@ -689,14 +596,93 @@ async def edit_or_send(cb: CallbackQuery, text: str, kb: InlineKeyboardMarkup | 
 async def cmd_start(m: Message, state: FSMContext):
     await state.clear()
     upsert_user(m.from_user)
-    if get_setting("MAINTENANCE", "0") == "1" and not is_admin(m.from_user.id):
+    is_admin_user = is_admin(m.from_user.id)
+
+    if get_setting("MAINTENANCE", "0") == "1" and not is_admin_user:
         await m.answer("🛠 البوت في وضع الصيانة حالياً.")
         return
-    text = f"{divider()}\n<b>{BOT_NAME}</b>\n{divider()}\n\nاختر نوع المشكلة:"
-    await m.answer(text, reply_markup=main_menu_kb())
+
+    emoji = random_emoji()
+    welcome = get_setting("welcome_message", "🌟 أهلاً وسهلاً بك 🌟")
+    text = (
+        f"{divider()}\n"
+        f"{emoji} <b>{BOT_NAME}</b> {emoji}\n"
+        f"{divider()}\n\n"
+        f"{welcome}\n\n"
+        f"👋 مرحباً <b>{m.from_user.first_name}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"✨ اختر الخدمة التي تريدها 👇\n"
+        f"━━━━━━━━━━━━━━━━"
+    )
+
+    await m.answer(text, reply_markup=reply_menu_kb(is_admin_user))
     await m.answer(
         "⚠️ تنويه: هذا النظام يساعدك على تجهيز طلب مراجعة رسمي ومتابعته. "
-        "لا يقوم بإزالة حظر واتساب ولا بتجاوز سياساتها."
+        "لا يقوم بإزالة حظر واتساب ولا بتجاوز سياساتها.",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(Command("id"))
+async def cmd_id(m: Message):
+    await m.answer(
+        f"🆔 <b>معلوماتك:</b>\n\n"
+        f"👤 الاسم: {m.from_user.first_name}\n"
+        f"🆔 الآيدي: <code>{m.from_user.id}</code>\n"
+        f"👤 اليوزر: @{m.from_user.username or 'لا يوجد'}"
+    )
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer(
+        "✕ تم إلغاء العملية الحالية.",
+        reply_markup=reply_menu_kb(is_admin(m.from_user.id)),
+    )
+
+
+@router.message(F.text == "📩 طلب جديد")
+async def btn_new_request(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer(
+        f"{divider()}\n📝 <b>طلب دعم جديد</b>\n{divider()}\n\n"
+        "اختر نوع المشكلة:",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(F.text == "📋 طلباتي")
+async def btn_my_requests(m: Message):
+    user = upsert_user(m.from_user)
+    total = db_one("SELECT COUNT(*) AS c FROM requests WHERE user_id=?", (user["id"],))["c"]
+    rows = db_all(
+        "SELECT code, request_type_name, status, created_at FROM requests "
+        "WHERE user_id=? ORDER BY created_at DESC LIMIT 5",
+        (user["id"],),
+    )
+    if not rows:
+        await m.answer("📭 لا توجد طلبات بعد.")
+        return
+    lines = [f"{divider()}\n🗂 <b>طلباتي</b> ({total})\n{divider()}\n"]
+    for r in rows:
+        lines.append(
+            f"• <code>{r['code']}</code>\n"
+            f"  {r['request_type_name']}\n"
+            f"  {status_ar(r['status'])} — {fmt_dt(r['created_at'])}"
+        )
+    await m.answer("\n".join(lines), reply_markup=back_kb())
+
+
+@router.message(F.text == "🆘 المساعدة")
+async def btn_help(m: Message):
+    await m.answer(
+        f"ℹ️ <b>المساعدة</b>\n\n"
+        f"• اختر نوع المشكلة من القائمة\n"
+        f"• أرسل رقم هاتفك بالصيغة الدولية\n"
+        f"• سيتابع النظام طلبك تلقائيًا\n\n"
+        f"⚠️ لا يقوم البوت بفك حظر واتساب.",
+        reply_markup=back_kb(),
     )
 
 
@@ -704,7 +690,14 @@ async def cmd_start(m: Message, state: FSMContext):
 async def cb_main(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     upsert_user(cb.from_user)
-    text = f"{divider()}\n<b>{BOT_NAME}</b>\n{divider()}\n\nاختر نوع المشكلة:"
+    is_admin_user = is_admin(cb.from_user.id)
+    emoji = random_emoji()
+    text = (
+        f"{divider()}\n"
+        f"{emoji} <b>{BOT_NAME}</b> {emoji}\n"
+        f"{divider()}\n\n"
+        f"✨ اختر الخدمة 👇"
+    )
     await edit_or_send(cb, text, main_menu_kb())
     await cb.answer()
 
@@ -712,11 +705,11 @@ async def cb_main(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "help")
 async def cb_help(cb: CallbackQuery):
     text = (
-        "ℹ️ <b>المساعدة</b>\n\n"
-        "• اختر نوع المشكلة من القائمة\n"
-        "• أرسل رقم هاتفك بالصيغة الدولية\n"
-        "• سيتابع النظام طلبك تلقائيًا\n\n"
-        "⚠️ لا يقوم البوت بفك حظر واتساب."
+        f"ℹ️ <b>المساعدة</b>\n\n"
+        f"• اختر نوع المشكلة من القائمة\n"
+        f"• أرسل رقم هاتفك بالصيغة الدولية\n"
+        f"• سيتابع النظام طلبك تلقائيًا\n\n"
+        f"⚠️ لا يقوم البوت بفك حظر واتساب."
     )
     await edit_or_send(cb, text, back_kb())
     await cb.answer()
@@ -752,8 +745,13 @@ async def cb_choose_type(cb: CallbackQuery, state: FSMContext):
 async def on_phone(m: Message, state: FSMContext):
     raw = m.text or ""
     if not is_valid_phone(raw):
-        await m.answer("⚠ صيغة الرقم غير صحيحة، أرسل الرقم بصيغة دولية.\n"
-                       "مثال: <code>+967XXXXXXXXX</code>")
+        await m.answer(
+            "⚠ صيغة الرقم غير صحيحة.\n"
+            "أرسل الرقم بصيغة دولية مثل:\n<code>+967XXXXXXXXX</code>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ إلغاء", callback_data="req:cancel")]
+            ])
+        )
         return
     phone = norm_phone(raw)
     data = await state.get_data()
@@ -761,11 +759,10 @@ async def on_phone(m: Message, state: FSMContext):
     user = upsert_user(m.from_user)
     req_type = db_one("SELECT * FROM request_types WHERE id=?", (type_id,))
     if not req_type:
-        await m.answer("⚠ النوع لم يعد متوفرًا. ابدأ من جديد بـ /start")
+        await m.answer("⚠ النوع لم يعد متوفراً. ابدأ من جديد بـ /start")
         await state.clear()
         return
 
-    # رقم طلب جديد
     cnt = db_one("SELECT COUNT(*) AS c FROM requests")["c"]
     code = f"MTR-{cnt + 1:06d}"
     correlation_id = str(uuid.uuid4())
@@ -789,23 +786,14 @@ async def on_phone(m: Message, state: FSMContext):
 
     await state.clear()
 
-    # إشعار مبدئي
     await m.answer(
-        f"⏳ جاري معالجة الطلب...\n\nرقم الطلب: <code>{code}</code>",
+        f"⏳ <b>جاري معالجة الطلب...</b>\n\n"
+        f"📋 رقم الطلب: <code>{code}</code>\n"
+        f"{divider()}",
     )
 
-    # إرسال تلقائي حسب الإعداد
     if get_setting("AUTO_SEND", "1") == "1":
         await try_send_request(code, notify_user_chat_id=m.chat.id, silent=False)
-    else:
-        await m.answer(
-            f"✓ تم إنشاء الطلب <code>{code}</code>\n"
-            "بانتظار مراجعة الأدمن للإرسال.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0")],
-                [InlineKeyboardButton(text="‹ القائمة الرئيسية", callback_data="menu:main")],
-            ]),
-        )
 
     await notify_admins(
         f"🆕 <b>طلب جديد</b>\n"
@@ -816,61 +804,85 @@ async def on_phone(m: Message, state: FSMContext):
     )
 
 
+@router.callback_query(F.data == "req:cancel")
+async def cb_req_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await edit_or_send(cb, "✕ تم إلغاء الطلب.", main_menu_kb())
+    await cb.answer()
+
+
 async def try_send_request(code: str, notify_user_chat_id: int | None = None,
                            silent: bool = False) -> None:
     row = db_one("SELECT * FROM requests WHERE code=?", (code,))
     if not row:
         return
-    db_exec("UPDATE requests SET status=?, updated_at=?, last_attempt=? WHERE id=?",
-            (RStatus.PREPARING.value, now().isoformat(), now().isoformat(), row["id"]))
+    db_exec(
+        "UPDATE requests SET status=?, updated_at=?, last_attempt=? WHERE id=?",
+        (RStatus.PREPARING.value, now().isoformat(), now().isoformat(), row["id"]),
+    )
 
-    result = await CONNECTOR.send_request(row, row["message"])
+    try:
+        subject = f"طلب مراجعة - {row['code']}"
+        body = (
+            f"السلام عليكم،\n\n"
+            f"أرغب في تقديم طلب مراجعة لحسابي.\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📋 رقم الطلب: {row['code']}\n"
+            f"📱 رقم الهاتف: {row['phone']}\n"
+            f"🏷️ نوع المشكلة: {row['request_type_name']}\n"
+            f"📅 التاريخ: {row['created_at']}\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"📝 التفاصيل:\n{row['message']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"مع الشكر،\n"
+            f"فريق المطري دعم"
+        )
+        result = send_support_email(subject, body)
+        sent_count = result["sent"]
+    except Exception as e:
+        log.error(f"Email error: {e}")
+        sent_count = 0
 
-    if result["ok"]:
+    if sent_count > 0:
         db_exec(
-            "UPDATE requests SET status=?, external_message_id=?, external_thread_id=?, "
+            "UPDATE requests SET status=?, external_message_id=?, "
             "correlation_id=?, updated_at=? WHERE id=?",
-            (RStatus.WAITING_REPLY.value, result["external_message_id"],
-             result["external_thread_id"], result["correlation_id"],
-             now().isoformat(), row["id"]),
+            (RStatus.WAITING_REPLY.value, f"email-{row['correlation_id'][:8]}",
+             row["correlation_id"], now().isoformat(), row["id"]),
         )
-        log_event(None, "REQUEST_SENT", code, result["status"])
-        db_exec(
-            "INSERT INTO request_events(request_id, event, details, created_at) VALUES (?,?,?,?)",
-            (row["id"], "SENT", result["status"], now().isoformat()),
-        )
+        log_event(None, "REQUEST_SENT", code, f"emails={sent_count}/6")
+
         if notify_user_chat_id and not silent:
             await bot.send_message(
                 notify_user_chat_id,
-                f"✓ <b>تم إرسال الطلب</b>\n\n"
-                f"رقم الطلب: <code>{code}</code>\n"
-                f"الحالة: {status_ar(RStatus.WAITING_REPLY.value)}\n\n"
-                "سنوافيك بالرد فور وصوله.",
+                f"{divider()}\n"
+                f"✅ <b>تم إرسال طلبك بنجاح</b>\n"
+                f"{divider()}\n\n"
+                f"📋 رقم الطلب: <code>{code}</code>\n"
+                f"📊 الحالة: {status_ar(RStatus.WAITING_REPLY.value)}\n\n"
+                f"📧 تم إرسال طلبك إلى {sent_count} قناة دعم\n\n"
+                f"{random_quote()}\n\n"
+                f"{divider()}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0")],
                     [InlineKeyboardButton(text="‹ القائمة الرئيسية", callback_data="menu:main")],
                 ]),
             )
     else:
-        db_exec("UPDATE requests SET status=?, updated_at=? WHERE id=?",
-                (RStatus.FAILED.value, now().isoformat(), row["id"]))
-        log_event(None, "REQUEST_SEND_FAILED", code, result.get("error") or "")
+        db_exec(
+            "UPDATE requests SET status=?, updated_at=? WHERE id=?",
+            (RStatus.FAILED.value, now().isoformat(), row["id"]),
+        )
+        log_event(None, "REQUEST_SEND_FAILED", code, "no emails sent")
         if notify_user_chat_id:
-            msg = (
-                "⚠ تعذر إرسال الطلب عبر قناة الدعم الرسمية."
-                if result["status"] != "NOT_CONFIGURED"
-                else "⚠ قناة الدعم غير مهيأة."
-            )
             await bot.send_message(
                 notify_user_chat_id,
-                f"{msg}\n\nرقم الطلب: <code>{code}</code>",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📋 طلباتي", callback_data="my:0")],
-                    [InlineKeyboardButton(text="‹ القائمة الرئيسية", callback_data="menu:main")],
-                ]),
+                f"⚠ <b>تعذر إرسال الطلب</b>\n\n"
+                f"📋 رقم الطلب: <code>{code}</code>\n"
+                f"يرجى التواصل مع الدعم لاحقاً.",
+                reply_markup=back_kb(),
             )
-
-
+            
 # ============================
 # MY REQUESTS
 # ============================
@@ -886,7 +898,7 @@ async def cb_my(cb: CallbackQuery):
         (user["id"], per_page, page * per_page),
     )
     if not rows:
-        await edit_or_send(cb, "لا توجد طلبات بعد.", back_kb())
+        await edit_or_send(cb, "📭 لا توجد طلبات بعد.", back_kb())
         await cb.answer()
         return
     total_pages = max((total + per_page - 1) // per_page, 1)
@@ -921,9 +933,29 @@ async def cmd_admin(m: Message, state: FSMContext):
     await state.clear()
     log_event(m.from_user.id, "ADMIN_LOGIN")
     await m.answer(
-        f"{divider()}\n<b>لوحة تحكم المطري</b>\n{divider()}",
-        reply_markup=admin_panel_kb(),
+        f"{divider()}\n⚙️ <b>لوحة تحكم المطري</b>\n{divider()}",
+        reply_markup=admin_reply_kb(),
     )
+    await m.answer("اختر من الأزرار أو من القائمة 👇", reply_markup=admin_panel_kb())
+
+
+@router.message(F.text == "⚙️ لوحة التحكم")
+async def btn_admin_panel(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        await m.answer("⛔ ليس لديك صلاحية.")
+        return
+    await state.clear()
+    await m.answer(
+        f"{divider()}\n⚙️ <b>لوحة تحكم المطري</b>\n{divider()}",
+        reply_markup=admin_reply_kb(),
+    )
+    await m.answer("اختر من الأزرار أو من القائمة 👇", reply_markup=admin_panel_kb())
+
+
+@router.message(F.text == "🔙 رجوع للقائمة الرئيسية")
+async def btn_back_main(m: Message, state: FSMContext):
+    await state.clear()
+    await cmd_start(m, state)
 
 
 @router.callback_query(F.data == "adm:panel")
@@ -932,7 +964,11 @@ async def cb_adm_panel(cb: CallbackQuery, state: FSMContext):
         await cb.answer("⛔", show_alert=True)
         return
     await state.clear()
-    await edit_or_send(cb, f"{divider()}\n<b>لوحة تحكم المطري</b>\n{divider()}", admin_panel_kb())
+    await edit_or_send(
+        cb,
+        f"{divider()}\n⚙️ <b>لوحة تحكم المطري</b>\n{divider()}",
+        admin_panel_kb(),
+    )
     await cb.answer()
 
 
@@ -977,6 +1013,13 @@ async def cb_adm_reqs(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.message(F.text == "📋 الطلبات")
+async def btn_admin_requests(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await m.answer("اختر الحالة:", reply_markup=status_filter_kb())
+
+
 @router.callback_query(F.data == "adm:filter")
 async def cb_adm_filter(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
@@ -1009,8 +1052,7 @@ async def cb_adm_open(cb: CallbackQuery):
         f"الحالة: {status_ar(r['status'])}\n"
         f"الإنشاء: {fmt_dt(r['created_at'])}\n"
         f"آخر تحديث: {fmt_dt(r['updated_at'])}\n"
-        f"Correlation ID: <code>{r['correlation_id'] or '—'}</code>\n"
-        f"External Message: <code>{r['external_message_id'] or '—'}</code>\n\n"
+        f"Correlation ID: <code>{r['correlation_id'] or '—'}</code>\n\n"
         f"<b>الرسالة:</b>\n{r['message']}\n\n"
         f"<b>الرد:</b>\n{r['reply_text'] or '—'}\n\n"
         f"<b>ملاحظة:</b>\n{r['admin_note'] or '—'}"
@@ -1048,19 +1090,22 @@ async def cb_adm_setst(cb: CallbackQuery):
     log_event(cb.from_user.id, "STATUS_CHANGE", r["code"], f"{r['status']} -> {st}")
     await cb.answer("تم التحديث")
 
-    # إشعار المستخدم إذا الرد متاح
     u = db_one("SELECT telegram_id FROM users WHERE id=?", (r["user_id"],))
     if u and get_setting("AUTO_REPLY", "1") == "1":
         try:
             await bot.send_message(
                 u["telegram_id"],
-                f"{divider()}\n<b>تحديث طلبك</b>\n{divider()}\n\n"
-                f"رقم الطلب: <code>{r['code']}</code>\n"
-                f"الحالة الجديدة: {status_ar(st)}",
+                f"{divider()}\n"
+                f"📢 <b>تحديث على طلبك</b>\n"
+                f"{divider()}\n\n"
+                f"📋 رقم الطلب: <code>{r['code']}</code>\n"
+                f"📊 الحالة الجديدة: {status_ar(st)}\n\n"
+                f"{random_quote()}",
             )
         except TelegramAPIError:
             pass
 
+    cb.data = f"adm:open:{r['code']}"
     await cb_adm_open(cb)
 
 
@@ -1096,8 +1141,9 @@ async def cb_adm_resend_go(cb: CallbackQuery):
         await cb.answer("غير موجود", show_alert=True)
         return
     log_event(cb.from_user.id, "RESEND", r["code"])
-    await cb.answer("جاري الإرسال...")
+    await cb.answer("⏳ جاري الإرسال...")
     await try_send_request(r["code"], notify_user_chat_id=None)
+    cb.data = f"adm:open:{r['code']}"
     await cb_adm_open(cb)
 
 
@@ -1141,7 +1187,7 @@ async def on_adm_note(m: Message, state: FSMContext):
     db_exec("UPDATE requests SET admin_note=?, updated_at=? WHERE id=?",
             (m.text or "", now().isoformat(), req_id))
     log_event(m.from_user.id, "ADD_NOTE", r["code"])
-    await m.answer("✓ تمت إضافة الملاحظة.", reply_markup=back_kb("adm:panel"))
+    await m.answer("✓ تمت إضافة الملاحظة.", reply_markup=admin_panel_kb())
     await state.clear()
 
 
@@ -1175,16 +1221,17 @@ async def on_adm_msg(m: Message, state: FSMContext):
     try:
         await bot.send_message(
             r["tg_id"],
-            f"✉ <b>رسالة من الدعم</b>\n\nبخصوص الطلب: <code>{r['code']}</code>\n\n{m.text}",
+            f"✉ <b>رسالة من الدعم</b>\n\n"
+            f"بخصوص الطلب: <code>{r['code']}</code>\n\n{m.text}",
         )
         log_event(m.from_user.id, "SEND_USER_MSG", r["code"], "ok")
-        await m.answer("✓ تم الإرسال.")
+        await m.answer("✓ تم الإرسال.", reply_markup=admin_panel_kb())
     except TelegramAPIError:
         await m.answer("⚠ فشل الإرسال.")
     await state.clear()
 
 
-# ---------- محاكاة رد وارد (للاختبار) ----------
+# ---------- محاكاة رد وارد ----------
 @router.callback_query(F.data.startswith("adm:simreply:"))
 async def cb_adm_simreply(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
@@ -1195,7 +1242,7 @@ async def cb_adm_simreply(cb: CallbackQuery, state: FSMContext):
     await state.set_state(AdminFlow.sim_reply)
     await edit_or_send(
         cb,
-        "📨 اكتب نص الرد الوارد (سيُربط بالطلب عبر correlation_id):",
+        "📨 اكتب نص الرد الوارد:",
         back_kb(f"adm:open_id:{req_id}"),
     )
     await cb.answer()
@@ -1218,164 +1265,125 @@ async def on_sim_reply(m: Message, state: FSMContext):
         "external_thread_id": r["external_thread_id"],
         "text": m.text or "",
     })
-    await m.answer("✓ تمت معالجة الرد.")
+    await m.answer("✓ تمت معالجة الرد.", reply_markup=admin_panel_kb())
     await state.clear()
 
 
-# ---------- أنواع المشاكل ----------
-@router.callback_query(F.data == "adm:types")
-async def cb_adm_types(cb: CallbackQuery):
+# ============================
+# 🎨 تخصيص الأزرار
+# ============================
+@router.message(F.text == "🎨 تخصيص الأزرار")
+async def btn_customize_buttons(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await show_buttons_editor(m)
+
+
+@router.callback_query(F.data == "adm:buttons_config")
+async def cb_buttons_config(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    rows = db_all("SELECT id, name, description, enabled FROM request_types ORDER BY id")
-    lines = [f"{divider()}\n🗂 <b>أنواع المشاكل</b>\n{divider()}\n"]
+    await show_buttons_editor(cb.message)
+
+
+async def show_buttons_editor(target: Message):
+    buttons = db_all("SELECT id, button_key, label, position, enabled FROM buttons_config ORDER BY position")
+    lines = [f"{divider()}\n🎨 <b>تخصيص الأزرار</b>\n{divider()}\n\n"]
     kb_rows = []
-    for r in rows:
-        st = "✅" if r["enabled"] else "⛔"
-        lines.append(f"{st} [{r['id']}] {r['name']} — {r['description'] or ''}")
+    for b in buttons:
+        st = "✅" if b["enabled"] else "⛔"
+        lines.append(f"{st} <b>{b['label']}</b>\n   ترتيب: {b['position']}\n")
         kb_rows.append([
-            InlineKeyboardButton(text=f"✎ {r['name']}", callback_data=f"adm:tedit:{r['id']}"),
-            InlineKeyboardButton(text="✅/⛔", callback_data=f"adm:ttoggle:{r['id']}"),
-            InlineKeyboardButton(text="🗑", callback_data=f"adm:tdel:{r['id']}"),
+            InlineKeyboardButton(text=f"✏️ {b['label']}", callback_data=f"adm:btn_edit:{b['id']}"),
+            InlineKeyboardButton(text="✅/⛔", callback_data=f"adm:btn_toggle:{b['id']}"),
+            InlineKeyboardButton(text="⬆️", callback_data=f"adm:btn_up:{b['id']}"),
+            InlineKeyboardButton(text="⬇️", callback_data=f"adm:btn_down:{b['id']}"),
         ])
-    kb_rows.append([InlineKeyboardButton(text="➕ إضافة نوع", callback_data="adm:tadd")])
     kb_rows.append([InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")])
-    await edit_or_send(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows))
-    await cb.answer()
+    await target.answer(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
 
 
-@router.callback_query(F.data == "adm:tadd")
-async def cb_adm_tadd(cb: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("adm:btn_edit:"))
+async def cb_btn_edit(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    await state.set_state(AdminFlow.add_type_name)
-    await edit_or_send(cb, "➕ أرسل اسم النوع (مثال: حظر حساب):", back_kb("adm:types"))
+    btn_id = int(cb.data.split(":")[2])
+    await state.update_data(btn_id=btn_id)
+    await state.set_state(AdminFlow.edit_button_label)
+    await edit_or_send(cb, "✏️ أرسل النص الجديد للزر:", back_kb("adm:buttons_config"))
     await cb.answer()
 
 
-@router.message(AdminFlow.add_type_name)
-async def on_add_type_name(m: Message, state: FSMContext):
+@router.message(AdminFlow.edit_button_label)
+async def on_edit_button_label(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
-        return
-    name = (m.text or "").strip()
-    if len(name) < 2:
-        await m.answer("⚠ اسم قصير")
-        return
-    if db_one("SELECT id FROM request_types WHERE name=?", (name,)):
-        await m.answer("⚠ الاسم مستخدم مسبقًا")
-        return
-    await state.update_data(tname=name)
-    await state.set_state(AdminFlow.add_type_desc)
-    await m.answer("✍ أرسل وصفًا مختصرًا:")
-
-
-@router.message(AdminFlow.add_type_desc)
-async def on_add_type_desc(m: Message, state: FSMContext):
-    if not is_admin(m.from_user.id):
-        return
-    await state.update_data(tdesc=(m.text or "").strip())
-    await state.set_state(AdminFlow.add_type_template)
-    await m.answer(
-        "✍ أرسل قالب الرسالة.\n\n"
-        "المتغيرات المتاحة:\n"
-        "<code>{phone}</code> <code>{request_id}</code> <code>{user_id}</code> "
-        "<code>{username}</code> <code>{first_name}</code> <code>{request_type}</code> "
-        "<code>{created_at}</code>"
-    )
-
-
-@router.message(AdminFlow.add_type_template)
-async def on_add_type_template(m: Message, state: FSMContext):
-    if not is_admin(m.from_user.id):
-        return
-    tpl = (m.text or "").strip()
-    if len(tpl) < 5:
-        await m.answer("⚠ القالب قصير")
         return
     data = await state.get_data()
-    ts = now().isoformat()
-    db_exec(
-        "INSERT INTO request_types(name, description, template, enabled, created_at) "
-        "VALUES (?,?,?,1,?)",
-        (data["tname"], data.get("tdesc", ""), tpl, ts),
-    )
-    tid = db_one("SELECT id FROM request_types WHERE name=?", (data["tname"],))["id"]
-    db_exec("INSERT INTO message_templates(type_id, body, updated_at) VALUES (?,?,?)",
-            (tid, tpl, ts))
-    log_event(m.from_user.id, "ADD_TYPE", data["tname"])
-    await m.answer("✓ تمت الإضافة.", reply_markup=back_kb("adm:types"))
+    btn_id = data.get("btn_id")
+    new_label = (m.text or "").strip()
+    if not new_label:
+        await m.answer("نص فارغ")
+        return
+    db_exec("UPDATE buttons_config SET label=? WHERE id=?", (new_label, btn_id))
+    log_event(m.from_user.id, "EDIT_BUTTON", str(btn_id))
+    await m.answer("✅ تم تحديث الزر.", reply_markup=admin_panel_kb())
     await state.clear()
 
 
-@router.callback_query(F.data.startswith("adm:ttoggle:"))
-async def cb_adm_ttoggle(cb: CallbackQuery):
+@router.callback_query(F.data.startswith("adm:btn_toggle:"))
+async def cb_btn_toggle(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    tid = int(cb.data.split(":")[2])
-    db_exec("UPDATE request_types SET enabled = 1 - enabled WHERE id=?", (tid,))
-    log_event(cb.from_user.id, "TOGGLE_TYPE", str(tid))
+    btn_id = int(cb.data.split(":")[2])
+    db_exec("UPDATE buttons_config SET enabled = 1 - enabled WHERE id=?", (btn_id,))
     await cb.answer("تم التبديل")
-    await cb_adm_types(cb)
+    await show_buttons_editor(cb.message)
 
 
-@router.callback_query(F.data.startswith("adm:tdel:"))
-async def cb_adm_tdel(cb: CallbackQuery):
+@router.callback_query(F.data.startswith("adm:btn_up:"))
+async def cb_btn_up(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    tid = int(cb.data.split(":")[2])
-    db_exec("DELETE FROM request_types WHERE id=?", (tid,))
-    log_event(cb.from_user.id, "DELETE_TYPE", str(tid))
-    await cb.answer("تم الحذف")
-    await cb_adm_types(cb)
+    btn_id = int(cb.data.split(":")[2])
+    r = db_one("SELECT position FROM buttons_config WHERE id=?", (btn_id,))
+    if r:
+        db_exec("UPDATE buttons_config SET position=? WHERE id=?", (r["position"] - 5, btn_id))
+    await cb.answer("⬆️")
+    await show_buttons_editor(cb.message)
 
 
-@router.callback_query(F.data.startswith("adm:tedit:"))
-async def cb_adm_tedit(cb: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("adm:btn_down:"))
+async def cb_btn_down(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    tid = int(cb.data.split(":")[2])
-    await state.update_data(tid=tid)
-    await state.set_state(AdminFlow.edit_type_name)
-    r = db_one("SELECT name FROM request_types WHERE id=?", (tid,))
-    await edit_or_send(cb, f"✎ الاسم الحالي: <b>{r['name'] if r else '?'}</b>\n\nأرسل الاسم الجديد:",
-                       back_kb("adm:types"))
-    await cb.answer()
+    btn_id = int(cb.data.split(":")[2])
+    r = db_one("SELECT position FROM buttons_config WHERE id=?", (btn_id,))
+    if r:
+        db_exec("UPDATE buttons_config SET position=? WHERE id=?", (r["position"] + 5, btn_id))
+    await cb.answer("⬇️")
+    await show_buttons_editor(cb.message)
 
 
-@router.message(AdminFlow.edit_type_name)
-async def on_edit_type_name(m: Message, state: FSMContext):
+# ============================
+# أنواع المشاكل + القوالب (مختصر)
+# ============================
+@router.message(F.text == "📝 القوالب")
+async def btn_templates(m: Message):
     if not is_admin(m.from_user.id):
-        return
-    data = await state.get_data()
-    tid = data.get("tid")
-    new_name = (m.text or "").strip()
-    if len(new_name) < 2:
-        await m.answer("⚠ اسم قصير")
-        return
-    db_exec("UPDATE request_types SET name=? WHERE id=?", (new_name, tid))
-    log_event(m.from_user.id, "EDIT_TYPE", str(tid))
-    await m.answer("✓ تم التحديث.", reply_markup=back_kb("adm:types"))
-    await state.clear()
-
-
-# ---------- قوالب الرسائل ----------
-@router.callback_query(F.data == "adm:templates")
-async def cb_adm_templates(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        await cb.answer("⛔", show_alert=True)
         return
     rows = db_all("SELECT id, name, template FROM request_types ORDER BY id")
     kb_rows = [[InlineKeyboardButton(text=f"📝 {r['name']}", callback_data=f"adm:tpl:{r['id']}")]
                for r in rows]
     kb_rows.append([InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")])
-    await edit_or_send(cb, "📝 <b>القوالب</b>\nاختر نوع الطلب:",
-                       InlineKeyboardMarkup(inline_keyboard=kb_rows))
-    await cb.answer()
+    await m.answer("📝 <b>القوالب</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
 @router.callback_query(F.data.startswith("adm:tpl:"))
@@ -1391,9 +1399,20 @@ async def cb_adm_tpl(cb: CallbackQuery):
         [InlineKeyboardButton(text="✎ تعديل القالب", callback_data=f"adm:tpl_edit:{tid}")],
         [InlineKeyboardButton(text="‹ رجوع", callback_data="adm:templates")],
     ])
-    await edit_or_send(cb, f"<b>{r['name']}</b>\n\n<pre>{body}</pre>\n\n"
-                           "المتغيرات: {phone} {request_id} {user_id} {username} "
-                           "{first_name} {request_type} {created_at}", kb)
+    await edit_or_send(cb, f"<b>{r['name']}</b>\n\n<pre>{body}</pre>", kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:templates")
+async def cb_adm_templates(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    rows = db_all("SELECT id, name FROM request_types ORDER BY id")
+    kb_rows = [[InlineKeyboardButton(text=f"📝 {r['name']}", callback_data=f"adm:tpl:{r['id']}")]
+               for r in rows]
+    kb_rows.append([InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")])
+    await edit_or_send(cb, "📝 <b>القوالب</b>", InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await cb.answer()
 
 
@@ -1423,33 +1442,179 @@ async def on_edit_template(m: Message, state: FSMContext):
     db_exec("UPDATE message_templates SET body=?, updated_at=? WHERE type_id=?",
             (body, now().isoformat(), tid))
     log_event(m.from_user.id, "EDIT_TEMPLATE", str(tid))
-    await m.answer("✓ تم التحديث.", reply_markup=back_kb("adm:templates"))
+    await m.answer("✅ تم التحديث.", reply_markup=admin_panel_kb())
     await state.clear()
 
 
-# ---------- المستخدمون ----------
+# ============================
+# أنواع المشاكل
+# ============================
+@router.callback_query(F.data == "adm:types")
+async def cb_adm_types(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    rows = db_all("SELECT id, name, description, enabled FROM request_types ORDER BY id")
+    lines = [f"{divider()}\n🗂 <b>أنواع المشاكل</b>\n{divider()}\n"]
+    kb_rows = []
+    for r in rows:
+        st = "✅" if r["enabled"] else "⛔"
+        lines.append(f"{st} [{r['id']}] {r['name']}")
+        kb_rows.append([
+            InlineKeyboardButton(text=f"✎ {r['name']}", callback_data=f"adm:tedit:{r['id']}"),
+            InlineKeyboardButton(text="✅/⛔", callback_data=f"adm:ttoggle:{r['id']}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"adm:tdel:{r['id']}"),
+        ])
+    kb_rows.append([InlineKeyboardButton(text="➕ إضافة نوع", callback_data="adm:tadd")])
+    kb_rows.append([InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")])
+    await edit_or_send(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ttoggle:"))
+async def cb_adm_ttoggle(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    tid = int(cb.data.split(":")[2])
+    db_exec("UPDATE request_types SET enabled = 1 - enabled WHERE id=?", (tid,))
+    await cb.answer("تم التبديل")
+    cb.data = "adm:types"
+    await cb_adm_types(cb)
+
+
+@router.callback_query(F.data.startswith("adm:tdel:"))
+async def cb_adm_tdel(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    tid = int(cb.data.split(":")[2])
+    db_exec("DELETE FROM request_types WHERE id=?", (tid,))
+    await cb.answer("تم الحذف")
+    cb.data = "adm:types"
+    await cb_adm_types(cb)
+
+
+@router.callback_query(F.data == "adm:tadd")
+async def cb_adm_tadd(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    await state.set_state(AdminFlow.add_type_name)
+    await edit_or_send(cb, "➕ أرسل اسم النوع:", back_kb("adm:types"))
+    await cb.answer()
+
+
+@router.message(AdminFlow.add_type_name)
+async def on_add_type_name(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    name = (m.text or "").strip()
+    if len(name) < 2:
+        await m.answer("⚠ اسم قصير")
+        return
+    await state.update_data(tname=name)
+    await state.set_state(AdminFlow.add_type_desc)
+    await m.answer("✍ أرسل وصفًا مختصرًا:")
+
+
+@router.message(AdminFlow.add_type_desc)
+async def on_add_type_desc(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    await state.update_data(tdesc=(m.text or "").strip())
+    await state.set_state(AdminFlow.add_type_template)
+    await m.answer(
+        "✍ أرسل قالب الرسالة.\n\n"
+        "المتغيرات: {phone} {request_id} {user_id} {username} {first_name} {request_type} {created_at}"
+    )
+
+
+@router.message(AdminFlow.add_type_template)
+async def on_add_type_template(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    tpl = (m.text or "").strip()
+    if len(tpl) < 5:
+        await m.answer("⚠ القالب قصير")
+        return
+    data = await state.get_data()
+    ts = now().isoformat()
+    db_exec(
+        "INSERT INTO request_types(name, description, template, enabled, created_at) VALUES (?,?,?,1,?)",
+        (data["tname"], data.get("tdesc", ""), tpl, ts),
+    )
+    tid = db_one("SELECT id FROM request_types WHERE name=?", (data["tname"],))["id"]
+    db_exec("INSERT INTO message_templates(type_id, body, updated_at) VALUES (?,?,?)", (tid, tpl, ts))
+    await m.answer("✅ تمت الإضافة.", reply_markup=admin_panel_kb())
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("adm:tedit:"))
+async def cb_adm_tedit(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
+        return
+    tid = int(cb.data.split(":")[2])
+    await state.update_data(tid=tid)
+    await state.set_state(AdminFlow.edit_type_name)
+    r = db_one("SELECT name FROM request_types WHERE id=?", (tid,))
+    await edit_or_send(cb, f"✎ الاسم الحالي: <b>{r['name'] if r else '?'}</b>\n\nأرسل الاسم الجديد:",
+                       back_kb("adm:types"))
+    await cb.answer()
+
+
+@router.message(AdminFlow.edit_type_name)
+async def on_edit_type_name(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    data = await state.get_data()
+    tid = data.get("tid")
+    new_name = (m.text or "").strip()
+    if len(new_name) < 2:
+        await m.answer("⚠ اسم قصير")
+        return
+    db_exec("UPDATE request_types SET name=? WHERE id=?", (new_name, tid))
+    await m.answer("✅ تم التحديث.", reply_markup=admin_panel_kb())
+    await state.clear()
+
+
+# ============================
+# المستخدمون
+# ============================
+@router.message(F.text == "👤 المستخدمون")
+async def btn_users(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await show_users(m)
+
+
 @router.callback_query(F.data == "adm:users")
 async def cb_adm_users(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
+    await show_users(cb.message)
+    await cb.answer()
+
+
+async def show_users(target: Message):
     total = db_one("SELECT COUNT(*) AS c FROM users")["c"]
     rows = db_all(
         "SELECT telegram_id, username, first_name, requests_count, last_activity "
         "FROM users ORDER BY last_activity DESC LIMIT 10"
     )
-    lines = [f"{divider()}\n👤 <b>المستخدمون</b> (الإجمالي: {total})\n{divider()}\n"]
+    lines = [f"{divider()}\n👤 <b>المستخدمون</b> ({total})\n{divider()}\n"]
     for u in rows:
         lines.append(
             f"• {u['first_name'] or '—'} @{u['username'] or '—'} <code>{u['telegram_id']}</code>\n"
-            f"  الطلبات: {u['requests_count']} | آخر نشاط: {fmt_dt(u['last_activity'])}"
+            f"  الطلبات: {u['requests_count']}"
         )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔎 بحث", callback_data="adm:usearch")],
         [InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")],
     ])
-    await edit_or_send(cb, "\n".join(lines), kb)
-    await cb.answer()
+    await target.answer("\n".join(lines), reply_markup=kb)
 
 
 @router.callback_query(F.data == "adm:usearch")
@@ -1458,8 +1623,7 @@ async def cb_adm_usearch(cb: CallbackQuery, state: FSMContext):
         await cb.answer("⛔", show_alert=True)
         return
     await state.set_state(AdminFlow.search_user)
-    await edit_or_send(cb, "🔎 أرسل: Telegram ID / Username / كود طلب MTR-XXXXXX / رقم هاتف",
-                       back_kb("adm:users"))
+    await edit_or_send(cb, "🔎 أرسل: ID / Username / كود MTR / رقم هاتف", back_kb("adm:users"))
     await cb.answer()
 
 
@@ -1471,34 +1635,38 @@ async def on_search_user(m: Message, state: FSMContext):
     results = []
     if CODE_RE.match(q.upper()):
         r = db_one(
-            "SELECT r.code, r.phone, r.status, r.request_type_name, u.telegram_id, u.first_name, u.username "
+            "SELECT r.code, r.phone, r.status, r.request_type_name, u.telegram_id, u.first_name "
             "FROM requests r JOIN users u ON u.id=r.user_id WHERE r.code=?",
             (q.upper(),),
         )
         if r:
-            results.append(
-                f"📋 {r['code']} | {r['request_type_name']} | {status_ar(r['status'])}\n"
-                f"👤 {r['first_name'] or '—'} @{r['username'] or '—'} <code>{r['telegram_id']}</code>\n"
-                f"📱 {r['phone']}"
-            )
+            results.append(f"📋 {r['code']} | {r['request_type_name']} | {status_ar(r['status'])}\n"
+                           f"👤 {r['first_name'] or '—'} <code>{r['telegram_id']}</code>\n"
+                           f"📱 {r['phone']}")
     else:
         like = f"%{q.lstrip('@')}%"
         rows = db_all(
-            "SELECT telegram_id, username, first_name, requests_count, last_activity "
-            "FROM users WHERE CAST(telegram_id AS TEXT)=? OR username LIKE ? OR first_name LIKE ? LIMIT 15",
+            "SELECT telegram_id, username, first_name, requests_count FROM users "
+            "WHERE CAST(telegram_id AS TEXT)=? OR username LIKE ? OR first_name LIKE ? LIMIT 15",
             (q, like, like),
         )
         for u in rows:
-            results.append(
-                f"• {u['first_name'] or '—'} @{u['username'] or '—'} <code>{u['telegram_id']}</code>\n"
-                f"  الطلبات: {u['requests_count']} | آخر نشاط: {fmt_dt(u['last_activity'])}"
-            )
-    text = "🔎 <b>نتائج البحث</b>\n\n" + ("\n\n".join(results) if results else "لا نتائج.")
+            results.append(f"• {u['first_name'] or '—'} @{u['username'] or '—'} <code>{u['telegram_id']}</code>")
+    text = "🔎 <b>النتائج</b>\n\n" + ("\n\n".join(results) if results else "لا نتائج.")
     await m.answer(text, reply_markup=back_kb("adm:users"))
     await state.clear()
 
 
-# ---------- إحصائيات ----------
+# ============================
+# الإحصائيات
+# ============================
+@router.message(F.text == "📊 الإحصائيات")
+async def btn_stats(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await m.answer(build_stats_text(), reply_markup=admin_panel_kb())
+
+
 @router.callback_query(F.data == "adm:stats")
 async def cb_adm_stats(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
@@ -1511,12 +1679,6 @@ async def cb_adm_stats(cb: CallbackQuery):
 def build_stats_text() -> str:
     total_users = db_one("SELECT COUNT(*) AS c FROM users")["c"]
     total_reqs = db_one("SELECT COUNT(*) AS c FROM requests")["c"]
-    day_ago = (now() - timedelta(days=1)).isoformat()
-    week_ago = (now() - timedelta(days=7)).isoformat()
-    month_ago = (now() - timedelta(days=30)).isoformat()
-    today = db_one("SELECT COUNT(*) AS c FROM requests WHERE created_at>=?", (day_ago,))["c"]
-    week = db_one("SELECT COUNT(*) AS c FROM requests WHERE created_at>=?", (week_ago,))["c"]
-    month = db_one("SELECT COUNT(*) AS c FROM requests WHERE created_at>=?", (month_ago,))["c"]
     counts = {}
     for s in RStatus:
         counts[s.value] = db_one("SELECT COUNT(*) AS c FROM requests WHERE status=?", (s.value,))["c"]
@@ -1524,8 +1686,7 @@ def build_stats_text() -> str:
     lines = [
         f"{divider()}", "📊 <b>الإحصائيات</b>", f"{divider()}", "",
         f"👥 المستخدمون: <b>{total_users}</b>",
-        f"📋 إجمالي الطلبات: <b>{total_reqs}</b>",
-        f"🗓 اليوم: {today} | الأسبوع: {week} | الشهر: {month}", "",
+        f"📋 إجمالي الطلبات: <b>{total_reqs}</b>", "",
         "— حسب الحالة —",
     ]
     for s in RStatus:
@@ -1533,7 +1694,7 @@ def build_stats_text() -> str:
 
     if total_reqs:
         lines.append("")
-        lines.append("— توزيع الحالات —")
+        lines.append("— توزيع —")
         for s in RStatus:
             c = counts[s.value]
             bar = "█" * int(round((c / total_reqs) * 20))
@@ -1541,22 +1702,22 @@ def build_stats_text() -> str:
     return "\n".join(lines)
 
 
-# ---------- السجل ----------
+# ============================
+# السجل
+# ============================
 @router.callback_query(F.data == "adm:logs")
 async def cb_adm_logs(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
     rows = db_all(
-        "SELECT actor_id, action, target, details, created_at FROM logs "
-        "ORDER BY created_at DESC LIMIT 30"
+        "SELECT actor_id, action, target, details, created_at FROM logs ORDER BY created_at DESC LIMIT 30"
     )
     lines = [f"{divider()}\n📜 <b>آخر العمليات</b>\n{divider()}\n"]
     for r in rows:
         lines.append(
             f"• {fmt_dt(r['created_at'])}\n"
-            f"  {r['action']} | actor=<code>{r['actor_id']}</code> | target={r['target'] or '—'}\n"
-            f"  {r['details'] or ''}"
+            f"  {r['action']} | actor=<code>{r['actor_id']}</code> | target={r['target'] or '—'}"
         )
     if not rows:
         lines.append("لا يوجد سجل.")
@@ -1564,37 +1725,45 @@ async def cb_adm_logs(cb: CallbackQuery):
     await cb.answer()
 
 
-# ---------- إعدادات ----------
+# ============================
+# الإعدادات
+# ============================
+@router.message(F.text == "⚙️ الإعدادات")
+async def btn_settings(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+    await show_settings(m)
+
+
 @router.callback_query(F.data == "adm:settings")
 async def cb_adm_settings(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         await cb.answer("⛔", show_alert=True)
         return
-    keys = ["AUTO_SEND", "AUTO_REPLY", "MAINTENANCE", "LOGGING", "RETRY_ENABLED"]
+    await show_settings(cb.message)
+    await cb.answer()
+
+
+async def show_settings(target: Message):
+    keys = ["AUTO_SEND", "AUTO_REPLY", "MAINTENANCE", "LOGGING", "RETRY_ENABLED", "show_admin_button"]
     labels = {
         "AUTO_SEND": "الإرسال التلقائي",
         "AUTO_REPLY": "الرد التلقائي",
         "MAINTENANCE": "وضع الصيانة",
         "LOGGING": "تسجيل العمليات",
         "RETRY_ENABLED": "إعادة المحاولة",
+        "show_admin_button": "زر لوحة التحكم في القائمة السفلية",
     }
     kb_rows = []
     lines = [f"{divider()}\n⚙ <b>الإعدادات</b>\n{divider()}\n"]
     for k in keys:
         v = get_setting(k, "0")
-        lines.append(f"• {labels[k]}: {'✅ مفعّل' if v == '1' else '⛔ معطّل'}")
+        lines.append(f"• {labels[k]}: {'✅' if v == '1' else '⛔'}")
         kb_rows.append([InlineKeyboardButton(text=f"تبديل {labels[k]}", callback_data=f"adm:set:{k}")])
 
-    conn_mode = get_setting("CONNECTOR_MODE", "not_configured")
-    lines.append(f"\n🔌 وضع Connector: <b>{conn_mode}</b>")
-    kb_rows.append([
-        InlineKeyboardButton(text="not_configured", callback_data="adm:cmode:not_configured"),
-        InlineKeyboardButton(text="manual", callback_data="adm:cmode:manual"),
-        InlineKeyboardButton(text="api", callback_data="adm:cmode:api"),
-    ])
+    kb_rows.append([InlineKeyboardButton(text="✏️ تعديل رسالة الترحيب", callback_data="adm:edit_welcome")])
     kb_rows.append([InlineKeyboardButton(text="‹ رجوع", callback_data="adm:panel")])
-    await edit_or_send(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows))
-    await cb.answer()
+    await target.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
 @router.callback_query(F.data.startswith("adm:set:"))
@@ -1605,28 +1774,39 @@ async def cb_adm_set(cb: CallbackQuery):
     k = cb.data.split(":")[2]
     v = get_setting(k, "0")
     set_setting(k, "0" if v == "1" else "1")
-    log_event(cb.from_user.id, "SETTING_TOGGLE", k)
     await cb.answer("تم التبديل")
+    cb.data = "adm:settings"
     await cb_adm_settings(cb)
 
 
-@router.callback_query(F.data.startswith("adm:cmode:"))
-async def cb_adm_cmode(cb: CallbackQuery):
-    if not is_super(cb.from_user.id):
-        await cb.answer("⛔ للسوبر أدمن فقط", show_alert=True)
+@router.callback_query(F.data == "adm:edit_welcome")
+async def cb_edit_welcome(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔", show_alert=True)
         return
-    mode = cb.data.split(":")[2]
-    if mode not in ("not_configured", "manual", "api"):
-        await cb.answer("وضع غير صالح", show_alert=True)
-        return
-    set_setting("CONNECTOR_MODE", mode)
-    CONNECTOR.refresh()
-    log_event(cb.from_user.id, "SET_CONNECTOR_MODE", mode)
-    await cb.answer(f"تم الضبط: {mode}")
-    await cb_adm_settings(cb)
+    await state.set_state(AdminFlow.edit_welcome)
+    current = get_setting("welcome_message", "")
+    await edit_or_send(cb, f"✏️ رسالة الترحيب الحالية:\n\n<code>{current}</code>\n\nأرسل النص الجديد:",
+                       back_kb("adm:settings"))
+    await cb.answer()
 
 
-# ---------- Backup / Export ----------
+@router.message(AdminFlow.edit_welcome)
+async def on_edit_welcome(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    new_text = (m.text or "").strip()
+    if not new_text:
+        await m.answer("فارغ")
+        return
+    set_setting("welcome_message", new_text)
+    await m.answer("✅ تم التحديث.", reply_markup=admin_panel_kb())
+    await state.clear()
+
+
+# ============================
+# Backup / Export
+# ============================
 @router.callback_query(F.data == "adm:backup")
 async def cb_adm_backup(cb: CallbackQuery):
     if not is_super(cb.from_user.id):
@@ -1640,7 +1820,6 @@ async def cb_adm_backup(cb: CallbackQuery):
             conn.commit()
         shutil.copy2(DATABASE_PATH, dst)
         await cb.message.answer_document(FSInputFile(str(dst)), caption=f"🗄 Backup {ts}")
-        log_event(cb.from_user.id, "BACKUP", dst.name)
         await cb.answer("تم")
     except Exception as e:
         log.exception("backup failed: %s", e)
@@ -1666,13 +1845,12 @@ async def cb_adm_export_csv(cb: CallbackQuery):
     except Exception as e:
         log.exception("export failed: %s", e)
         await cb.answer("فشل", show_alert=True)
-
-
+        
 # ============================
 # BACKGROUND WORKER
 # ============================
 async def background_worker() -> None:
-    """يتابع الطلبات التي بانتظار الرد، ويحاول استرجاع الردود إن أمكن."""
+    """يتابع الطلبات التي بانتظار الرد"""
     while True:
         try:
             if get_setting("RETRY_ENABLED", "1") == "1":
@@ -1682,7 +1860,6 @@ async def background_worker() -> None:
                     (RStatus.WAITING_REPLY.value, max_retries),
                 )
                 for r in rows:
-                    # في الوضع الحقيقي: نتحقق من القناة الرسمية هنا
                     res = await CONNECTOR.check_status(r)
                     if not res.get("ok"):
                         continue
@@ -1739,13 +1916,28 @@ async def mw_rate(handler, event: CallbackQuery, data):
 # ============================
 async def on_startup() -> None:
     db_init()
+
+    # ✅ تسجيل الأوامر الظاهرة في تيليجرام
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="🏠 بدء البوت"),
+            BotCommand(command="id", description="🆔 عرض آيديك"),
+            BotCommand(command="admin", description="⚙️ لوحة التحكم"),
+            BotCommand(command="cancel", description="✕ إلغاء"),
+        ])
+        log.info("✅ تم تسجيل الأوامر")
+    except Exception as e:
+        log.warning(f"⚠️ فشل تسجيل الأوامر: {e}")
+
     me = await bot.get_me()
     log.info("Bot started as @%s", me.username)
+
     for a in (ADMIN_IDS | SUPER_ADMIN_IDS):
         try:
             await bot.send_message(a, f"✅ تم تشغيل <b>{BOT_NAME}</b>.")
         except TelegramAPIError:
             pass
+
     asyncio.create_task(background_worker())
 
 
