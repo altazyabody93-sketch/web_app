@@ -346,7 +346,7 @@ def inject_globals():
     return {
         "current_user": user,
         "is_admin": is_admin(session['user_id']) if user else False,
-        "store_name": get_setting('store_name', '🛍️ متجر الأرقام'),
+        "store_name": get_setting('store_name', '🛍️ متجر الأرقام') or '🛍️ متجر الأرقام',
         "developer": DEVELOPER_USERNAME,
     }
 
@@ -449,7 +449,7 @@ def render_page(content, title="", extra_css="", extra_js=""):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title or get_setting('store_name', 'متجر الأرقام')}</title>
+    <title>{title or get_setting('store_name', 'متجر الأرقام') or 'متجر الأرقام'}</title>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -1951,9 +1951,9 @@ def run_telegram_bot():
 
 # ========== التشغيل الرئيسي ==========
 if __name__ == "__main__":
-    if not os.path.exists(DB_PATH):
-        print(f"⚠️ قاعدة البيانات {DB_PATH} غير موجودة!")
+    # ✅ تأكد من قاعدة البيانات قبل أي شي
+    init_db()
+    print(f"✅ قاعدة البيانات جاهزة: {DB_PATH}")
     
-    # ⚠️ البوت شغال في bot.py منفصل — لا نشغّله هنا
-    port = int(os.environ.get("PORT", 5001))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
