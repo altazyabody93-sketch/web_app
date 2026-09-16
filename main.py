@@ -40,7 +40,7 @@ ADMIN_IDS = {7325566792}                   # ← ضع Telegram ID الخاص ب�
 SUPER_ADMIN_IDS = {7602226699}             # ← ضع نفس ID (أو أعلى صلاحية)
 
 # إعدادات ثابتة (لا تحتاج تعديل)
-DATABASE_PATH = "matary.db"
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "matary.db")
 LOG_LEVEL = "INFO"
 BOT_NAME = "المطري دعم"
 RATE_LIMIT_SECONDS = 1
@@ -1748,6 +1748,34 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await bot.session.close()
+
+
+# ============================
+# HTTP Health Server (لـ Render)
+# ============================
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"✅ Health server on port {port}")
+    server.serve_forever()
+
+
+threading.Thread(target=start_health_server, daemon=True).start()
 
 
 if __name__ == "__main__":
