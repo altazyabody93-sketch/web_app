@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+*.db
+*.db-journal
+*.db-wal
+backups/
 .env
-store.db
-*.log
