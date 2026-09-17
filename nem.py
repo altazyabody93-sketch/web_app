@@ -1495,54 +1495,73 @@ def send_delivery_message(chat_id, phone, uid):
     has_2fa = two_fa and two_fa != 'لا يوجد'
     sym = syyad_conf.get('currency_symbol', '$')
     
+    # ═══════════ الرسالة الرئيسية ═══════════
     text = (
         "╔══════════════════════════════╗\n"
-        "║   🎉 <b>تم الشراء بنجاح</b>       ║\n"
+        "║   🎉 <b>تم الشراء بنجاح</b>      ║\n"
         "╚══════════════════════════════╝\n"
         "\n"
-        "┌──────────────────────────────┐\n"
-        f"│  📱 <b>الرقم:</b>\n"
-        f"│  <code>{phone}</code>\n"
-        "├──────────────────────────────┤\n"
-        f"│  🌍 <b>الدولة:</b> {details.get('country', '—')}\n"
-        f"│  💰 <b>السعر:</b> <code>{sym}{details.get('price_points', 0)}</code>\n"
-        "└──────────────────────────────┘\n"
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "┃   📱 <b>بيانات الرقم</b>\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
         "\n"
-        "┌──────────────────────────────┐\n"
-        "│  📌 <b>خطوات الدخول:</b>         │\n"
-        "└──────────────────────────────┘\n"
-        "\n"
-        "  <b>1️⃣</b> افتح تطبيق تيليجرام\n"
-        "  <b>2️⃣</b> اضغط \"تسجيل الدخول برقم الهاتف\"\n"
-        "  <b>3️⃣</b> أدخل الرقم:\n"
+        f"  🔹 <b>الرقم:</b>\n"
         f"     <code>{phone}</code>\n"
-        "  <b>4️⃣</b> انتظر وصول الكود هنا\n"
-        "  <b>5️⃣</b> أدخل الكود في التطبيق\n"
+        "\n"
+        f"  🔹 <b>الدولة:</b>\n"
+        f"     {details.get('country', '—')}\n"
+        "\n"
+        f"  🔹 <b>السعر:</b>\n"
+        f"     <code>{sym}{details.get('price_points', 0)}</code>\n"
     )
     
     if has_2fa:
         text += (
             "\n"
-            "┌──────────────────────────────┐\n"
-            "│  🔐 <b>كلمة المرور (2FA)</b>      │\n"
-            "└──────────────────────────────┘\n"
-            f"  <code>{two_fa}</code>\n"
+            "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+            "┃   🔐 <b>كلمة المرور (2FA)</b>\n"
+            "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
             "\n"
-            "  ⚠️ احتفظ بها للدخول لاحقًا\n"
+            f"  <blockquote><code>{two_fa}</code></blockquote>\n"
+            "\n"
+            "  ⚠️ <i>احتفظ بها للدخول لاحقًا</i>\n"
         )
     
     text += (
         "\n"
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "┃   📌 <b>خطوات الدخول</b>\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        "\n"
+        "<blockquote>"
+        "<b>1️⃣</b> افتح تطبيق تيليجرام\n"
+        "\n"
+        "<b>2️⃣</b> اضغط على <u>تسجيل الدخول برقم الهاتف</u>\n"
+        "\n"
+        f"<b>3️⃣</b> أدخل الرقم:\n"
+        f"    <code>{phone}</code>\n"
+        "\n"
+        "<b>4️⃣</b> اضغط على زر <u>🔑 طلب كود الدخول</u> بالأسفل\n"
+        "\n"
+        "<b>5️⃣</b> انتظر وصول الكود هنا\n"
+        "\n"
+        "<b>6️⃣</b> أدخل الكود في التطبيق</blockquote>\n"
+        "\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⏳ <i>سيصلك الكود هنا تلقائيًا</i>\n"
-        "⚠️ <i>لا تشارك الرقم مع أحد</i>\n"
+        "\n"
+        "  ⏳ <b>سيصلك الكود هنا تلقائيًا</b>\n"
+        "\n"
+        "  ⚠️ <u><b>لا تشارك الرقم مع أحد</b></u>\n"
+        "\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
-    kb = InlineKeyboardMarkup(row_width=2)
+    # ═══════════ الأزرار ═══════════
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(Btn.s("🔑 طلب كود الدخول", f"request_code:{phone}"))
     kb.row(
         Btn.p("👤 حسابي", "user_profile"),
-        Btn.s("🛒 شراء آخر", "user_buy"),
+        Btn.p("🛒 شراء آخر", "user_buy"),
     )
     kb.row(Btn.d("‹ القائمة الرئيسية", "user_main"))
     
@@ -1550,27 +1569,6 @@ def send_delivery_message(chat_id, phone, uid):
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode='html')
     except Exception as e:
         log(f"send_delivery: {e}", 'error')
-
-
-
-def notify_admin_purchase(phone, uid, amount):
-    """إشعار الأدمن بعملية شراء"""
-    try:
-        admin = str(syyad_conf['admin_ids'][0])
-        sym = syyad_conf.get('currency_symbol', '$')
-        bot.send_message(
-            int(admin),
-            f"🎉 <b>شراء جديد</b>\n\n"
-            f"📱 <code>{phone}</code>\n"
-            f"👤 <code>{uid}</code>\n"
-            f"💵 <code>{sym}{amount}</code>",
-            parse_mode='html'
-        )
-    except Exception:
-        pass
-
-
-# ⬇️ هنا ضع الدالة الجديدة ⬇️
 
 # ══════════════════════════════════════════════════════════════
 # 📢 إشعار قناة السجل (سجل الشراء)
@@ -1602,6 +1600,9 @@ def notify_sale_channel(phone, buyer_uid, price):
         else:
             user_tag = f"<code>{buyer_uid}</code>"
         
+        # ───── الرقم المخفي ─────
+        hidden_number = hide_phone(phone)
+        
         text = (
             "╭━━━━━━━━━━━━━━╮\n"
             "   🛒 <b>شراء جديد</b>\n"
@@ -1610,14 +1611,37 @@ def notify_sale_channel(phone, buyer_uid, price):
             f"👤 <b>{buyer_name}</b>\n"
             f"🔗 {user_tag}\n"
             "─────────────────\n"
+            f"📱 <code>{hidden_number}</code>\n"
+            "─────────────────\n"
             f"🌍 {country}\n"
-            f"💵 <b>{sym}{price}</b>\n"
+            f"💵 <b>سعر:</b> {sym}{price}\n"
             "─────────────────\n"
             f"🕐 {sale_time}  📅 {sale_date}\n"
             f"🔖 <code>#{order_id}</code>"
         )
         
-        bot.send_message(channel, text, parse_mode='html')
+        # ═══════ زر أسفل الرسالة ═══════
+        kb = InlineKeyboardMarkup(row_width=1)
+        
+        # الحصول على يوزر البوت
+        try:
+            bot_username = bot.get_me().username
+        except Exception:
+            bot_username = None
+        
+        if bot_username:
+            kb.add(Btn.u(
+                "🚀 بوت الأرقام",
+                f"https://t.me/{bot_username}",
+                'success'
+            ))
+        
+        bot.send_message(
+            channel,
+            text,
+            parse_mode='html',
+            reply_markup=kb
+        )
         log(f"✅ إشعار: {buyer_name} | #{order_id}", 'success')
         
     except Exception as e:
@@ -3650,14 +3674,32 @@ async def init_acc(phone, api_id, api_hash, sess_str):
                 buyer_id = code_reqs.get(phone)
                 if not buyer_id:
                     return
-                # إرسال الكود للمشتري
+                # إرسال الكود للمشتري — اقتباس + رموز
                 try:
+                    code_text = (
+                        "╔══════════════════════╗\n"
+                        "║   🔑 <b>كود الدخول</b>       ║\n"
+                        "╚══════════════════════╝\n"
+                        "\n"
+                        f"📱 <code>{phone}</code>\n"
+                        "\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "\n"
+                        "<blockquote>"
+                        "🎯 <b>الكود الخاص بك</b>\n"
+                        "\n"
+                        f"<code>{code}</code>"
+                        "</blockquote>\n"
+                        "\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "\n"
+                        "⏱️ <i>صالح لمدة قصيرة</i>\n"
+                        "🔒 <i>لا تشاركه مع أحد</i>"
+                    )
+                    
                     await bot.send_message(
                         int(buyer_id),
-                        f"🔑 <b>كود الدخول</b>\n\n"
-                        f"📱 <code>{phone}</code>\n\n"
-                        f"الكود: <code>{code}</code>\n\n"
-                        f"⏱️ صالح لمدة قصيرة",
+                        code_text,
                         parse_mode='html'
                     )
                 except Exception:
