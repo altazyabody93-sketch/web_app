@@ -129,7 +129,7 @@ user_states = {}
 # ══════════════════════════════════════════════════════════════
 
 syyad_conf = {
-    'admin_ids': [str(7602226699)],
+    'admin_ids': [str(7325566792)],
     'dailyGiftPoints': 10,
     'referralPoints': 5,
     'chargeRates': [],
@@ -2436,6 +2436,21 @@ def execute_delete_number(chat_id, msg_id, phone):
     save_all()
     screen_admin_numbers(chat_id, msg_id)
 
+def screen_admin_admins_menu(chat_id, msg_id):
+    """قائمة إدارة الأدمنية — مع أزرار الإضافة"""
+    admins = syyad_conf.get('admin_ids', [])
+    text = (
+        "╭──────────────────────────╮\n"
+        "  👥 <b>إدارة الأدمنية</b>\n"
+        "╰──────────────────────────╯\n\n"
+        f"📊 <b>العدد:</b> <code>{len(admins)}</code>\n\n"
+    )
+    for i, adm in enumerate(admins, 1):
+        text += f"{i}. <code>{adm}</code>\n"
+    
+    text += "\n⚡ اختر إجراء:"
+    
+    edit_or_send_message(chat_id, msg_id, text, kb_admin_admins())
 
 def screen_admin_list_admins(chat_id, msg_id):
     """قائمة الأدمنية"""
@@ -2884,7 +2899,7 @@ def cb_admin_router(call):
     
     # ═══════ الأدمنية ═══════
     elif data == 'adm_admins':
-        answer_callback(call.id); screen_admin_list_admins(chat_id, msg_id)
+        answer_callback(call.id); screen_admin_admins_menu(chat_id, msg_id)
     elif data == 'adm_add_admin':
         answer_callback(call.id); start_add_admin(chat_id, msg_id)
     elif data == 'adm_remove_admin':
