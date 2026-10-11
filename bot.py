@@ -4,6 +4,7 @@
 # ============================================================
 import os, json, random, string, time
 import sqlite3
+import re
 
 # ═══ قاعدة بيانات دائمة — تُعرّف قبل أي استخدام ═══
 # على Render: /data (Persistent Disk)
@@ -1958,82 +1959,68 @@ def load_numbers():
     if not os.path.exists(NUMBERS_FILE):
         return {}
     with open(NUMBERS_FILE, "r", encoding="utf-8") as f:
-        lines = [l.rstrip() for l in f]
-    # ═══ فصل الكتل: كل كتلة تبدأ بـ [منصة] ═══
-    blocks = []
-    current_platform = None
-    current_block = []
-    for line in lines:
-        s = line.strip()
-        if not s:
-            continue
-        if s.startswith("[") and s.endswith("]"):
-            name = s[1:-1].strip()
-            if not name:
-                continue
-            # لو لقينا عنوان جديد — نبدأ كتلة جديدة
-            if current_platform is None:
-                current_platform = name
-                current_block = []
-            else:
-                # احفظ الكتلة السابقة
-                blocks.append((current_platform, current_block))
-                current_platform = name
-                current_block = []
-        else:
-            current_block.append(s)
-    if current_platform is not None:
-        blocks.append((current_platform, current_block))
-
-    # ═══ حلّل كل كتلة: قد تكون منصة (فيها دول) أو دولة بدون منصة ═══
+        raw = f.read()
+    # ═══ افصل الكتل بأسطر فارغة ═══
+    chunks = re.split(r'\n\s*\n', raw.strip())
     data = {}
-    for block_name, block_lines in blocks:
-        # لو الكتلة فيها عناوين [] داخلها → هي منصة
-        # لو الكتلة فيها أرقام مباشرة → هي دولة (بدون منصة)
-        has_sub_countries = any(
-            l.startswith("[") and l.endswith("]") for l in block_lines
-        )
-        has_numbers = any(
-            (l.startswith("+") or (l and l[0].isdigit())) for l in block_lines
-        )
-
-        if has_numbers:
-            # دولة مجهولة — أضفها تحت "أخرى"
-            if "أخرى" not in data:
-                data["أخرى"] = {}
-            if block_name not in data["أخرى"]:
-                data["أخرى"][block_name] = []
-            for num in block_lines:
-                if num.startswith("+") or (num and num[0].isdigit()):
-                    if not num.startswith("+"):
-                        num = "+" + num
-                    data["أخرى"][block_name].append(num)
-        else:
-            # منصة — لكن يجب أن تحتوي دول داخلية
-            if block_name not in data:
-                data[block_name] = {}
-            # حلّل الدول داخلها
-            sub_country = None
-            for sub in block_lines:
-                if sub.startswith("[") and sub.endswith("]"):
-                    sub_country = sub[1:-1].strip()
-                    if sub_country and sub_country not in data[block_name]:
-                        data[block_name][sub_country] = []
-                elif sub and (sub.startswith("+") or sub[0].isdigit()):
-                    if sub_country:
-                        if not sub.startswith("+"):
-                            sub = "+" + sub
-                        data[block_name][sub_country].append(sub)
-
-    # لا تحذف المنصات الفارغة — لكن تأكد أنها dict فارغة
-    for p in list(data.keys()):
-        if data[p] is None:
-            data[p] = {}
+    for chunk in chunks:
+        chunk_lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+        if not chunk_lines:
+            continue
+        # أول عنوان = منصة
+        first = chunk_lines[0]
+        if not (first.startswith("[") and first.endswith("]")):
+            continue
+        platform = first[1:-1].strip()
+        if not platform:
+            continue
+        if platform not in data:
+            data[platform] = {}
+        # باقي الأسطر: عناوين دول + أرقام
+        current_country = None
+        for line in chunk_lines[1:]:
+            if line.startswith("[") and line.endswith("]"):
+                current_country = line[1:-1].strip()
+                if current_country and current_country not in data[platform]:
+                    data[platform][current_country] = []
+            else:
+                n = line.replace(" ", "").replace("-", "")
+                if not n.startswith("+"):
+                    if n and n[0].isdigit():
+                        n = "+" + n
+                    else:
+                        continue
+                if current_country is None:
+                    # رقم بدون دولة → "دول أخرى"
+                    data[platform].setdefault("دول أخرى", [])
+                    if n not in data[platform]["دول أخرى"]:
+                        data[platform]["دول أخرى"].append(n)
+                else:
+                    if n not in data[platform][current_country]:
+                        data[platform][current_country].append(n)
     return data
+
 
 def save_numbers_text(text):
     with open(NUMBERS_FILE, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def save_numbers_tree(data):
+    """يحفظ الشجرة بشكل نظيف — منصة + دول + أرقام"""
+    lines = []
+    for plat, countries in data.items():
+        lines.append("[" + plat + "]")
+        for country, nums in countries.items():
+            uniq = list(dict.fromkeys(nums))
+            if not uniq:
+                continue
+            lines.append("[" + country + "]")
+            for n in uniq:
+                lines.append(n)
+        lines.append("")
+    with open(NUMBERS_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 def get_numbers_tree():
     return load_numbers()
@@ -6488,6 +6475,33 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 </div></form></div>
 
 <div class="pane" id="pane-manage">
+<div class="card">
+<h2>
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#00d4a5;vertical-align:middle;margin-left:6px"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+إضافة أرقام لمنصة موجودة
+</h2>
+<div class="info-box">اختر منصة موجودة وارفع ملف أرقام — تُضاف للدول الموجودة بدون ما تمسح شي.</div>
+<form method="POST" action="/admin/add-numbers-existing" enctype="multipart/form-data">
+<label>اختر المنصة</label>
+<select name="existing_platform" required>
+<option value="">-- اختر منصة --</option>
+{% if tree %}{% for platform in tree.keys() %}
+<option value="{{ platform }}">{{ platform }}</option>
+{% endfor %}{% endif %}
+</select>
+<label>ارفع ملف الأرقام</label>
+<label class="file-drop">
+<span id="fn2">اضغط لاختيار ملف txt</span>
+<input type="file" name="file2" accept=".txt" onchange="document.getElementById('fn2').textContent=this.files[0]?this.files[0].name:'اضغط لاختيار ملف txt'">
+</label>
+<div class="info-box">كل رقم في سطر منفصل</div>
+<button type="submit" class="btn btn-green">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+إضافة الأرقام
+</button>
+</form>
+</div>
+
 <div class="card"><h2>المنصات المضافة</h2>
 {% if tree %}{% for platform, countries in tree.items() %}
 <div class="prow">
@@ -8326,6 +8340,49 @@ def admin_panel():
         chart_area=area_d
     )
 
+
+
+@app.route("/admin/add-numbers-existing", methods=["POST"])
+@admin_required
+def admin_add_numbers_existing():
+    """يضيف أرقام لمنصة موجودة — بدون ما يمسح الدول القديمة"""
+    platform = request.form.get("existing_platform", "").strip()
+    if not platform:
+        return redirect(url_for("admin_panel"))
+    numbers = []
+    file = request.files.get("file2")
+    if file and file.filename and file.filename.endswith(".txt"):
+        try:
+            text = file.read().decode("utf-8")
+        except:
+            text = file.read().decode("latin-1")
+        for l in text.split("\n"):
+            l = l.strip()
+            if not l:
+                continue
+            if l.startswith("+"):
+                numbers.append(l)
+            elif l and l[0].isdigit():
+                numbers.append("+" + l)
+    current = load_numbers()
+    if platform not in current:
+        current[platform] = {}
+    if numbers:
+        for num in numbers:
+            clean = num.strip().replace(" ", "").replace("-", "")
+            if not clean:
+                continue
+            code, country = detect_country(clean)
+            name = country["ar"] if code else "دول أخرى"
+            if name not in current[platform]:
+                current[platform][name] = []
+            if clean not in current[platform][name]:
+                current[platform][name].append(clean)
+    save_numbers_tree(current)
+    print(f"[ADD-EXISTING] {len(numbers)} رقم لمنصة {platform}")
+    return redirect(url_for("admin_panel"))
+
+
 @app.route("/admin/upload-file", methods=["POST"])
 @admin_required
 def admin_upload_file():
@@ -8347,21 +8404,23 @@ def admin_upload_file():
             elif l and l[0].isdigit():
                 numbers.append("+" + l)
     current = load_numbers()
-    # احتفظ بالمنصات الأخرى — احذف المنصة الحالية وأعد إضافتها في الآخر
-    if platform in current:
-        del current[platform]
-    current[platform] = {}
-    # لو الملف فيه أرقام → أضفها
+    # ═══ احتفظ بالمنصة كما هي — لا تحذف شي ═══
+    if platform not in current:
+        current[platform] = {}
     if numbers:
         for num in numbers:
-            code, country = detect_country(num)
+            clean = num.strip().replace(" ", "").replace("-", "")
+            if not clean:
+                continue
+            code, country = detect_country(clean)
             if code:
                 name = country["ar"]
-                if name not in current[platform]:
-                    current[platform][name] = []
-                if num not in current[platform][name]:
-                    current[platform][name].append(num)
-    # اكتب الملف — احتفظ بالمنصات حتى لو فاضية
+            else:
+                name = "دول أخرى"
+            if name not in current[platform]:
+                current[platform][name] = []
+            if clean not in current[platform][name]:
+                current[platform][name].append(clean)
     text_lines = []
     for plat, countries in current.items():
         text_lines.append("[" + plat + "]")
