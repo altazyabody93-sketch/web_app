@@ -4,6 +4,21 @@
 # ============================================================
 import os, json, random, string, time
 import sqlite3
+
+# ═══ قاعدة بيانات دائمة — تُعرّف قبل أي استخدام ═══
+# على Render: /data (Persistent Disk)
+# على Termux: ~/.otp_persist
+if os.environ.get("RENDER"):
+    _PERSIST_DIR = "/data"
+    if not os.path.exists(_PERSIST_DIR):
+        _PERSIST_DIR = os.path.expanduser("~")
+else:
+    _PERSIST_DIR = os.path.join(os.path.expanduser("~"), ".otp_persist")
+try:
+    os.makedirs(_PERSIST_DIR, exist_ok=True)
+except Exception:
+    _PERSIST_DIR = os.path.expanduser("~")
+print("[DB] مجلد البيانات: " + _PERSIST_DIR)
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session, make_response
 from functools import wraps
 try:
@@ -400,19 +415,6 @@ def _get_recovery_key(username):
 # ═══════════════════════════════════════════
 # SQLite — قاعدة البيانات
 # ═══════════════════════════════════════════
-# ═══ قاعدة بيانات دائمة ═══
-# على Render: نستخدم /data (Persistent Disk)
-# على Termux: نستخدم ~/.otp_persist
-if os.environ.get("RENDER"):
-    _PERSIST_DIR = "/data"
-    if not os.path.exists(_PERSIST_DIR):
-        _PERSIST_DIR = os.path.expanduser("~")
-else:
-    _PERSIST_DIR = os.path.join(os.path.expanduser("~"), ".otp_persist")
-try:
-    os.makedirs(_PERSIST_DIR, exist_ok=True)
-except Exception:
-    _PERSIST_DIR = os.path.expanduser("~")
 DB_FILE = os.path.join(_PERSIST_DIR, "data.db")
 print("[DB] ملف البيانات: " + DB_FILE)
 
