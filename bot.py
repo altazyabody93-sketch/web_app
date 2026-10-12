@@ -1519,6 +1519,30 @@ DEFAULT_SETTINGS = {
     "secondary_color": "#0ea5e9",
     "telegram_token": "",
     "telegram_chat_id": "",
+    "external_api_url": "http://78.154.103.39:11105",
+    "external_api_token": "",
+    "external_api_enabled": False,
+    "external_api_smart_bind": True,
+    "custom_bg_color": "",
+    "custom_text_color": "",
+    "custom_header_color": "",
+    "custom_btn_color": "",
+    "custom_title_text": "",
+    "custom_platform_title": "",
+    "custom_numbers_title": "",
+    "custom_codes_text": "",
+    "custom_fetch_text": "",
+    "custom_sticky_header": True,
+    "custom_header_icon_svg": "",
+    "custom_icon_home": "",
+    "custom_icon_support": "",
+    "custom_icon_dark": "",
+    "custom_icon_lang": "",
+    "custom_icon_platform": "",
+    "custom_color_card": "",
+    "custom_color_gradient2": "",
+    "custom_sticky_nav": True,
+    "external_api_auto_push": True,
     "notice_title": "",
     "notice_body": "",
     "notice_type": "info",
@@ -1681,7 +1705,7 @@ def save_codes(codes):
     with open(CODES_FILE, "w", encoding="utf-8") as f:
         json.dump(codes, f, ensure_ascii=False, indent=2)
 
-def add_code(phone, code):
+def add_code(phone, code, platform="", country="", brand="", source=""):
     codes = load_codes()
     now = time.time()
     for c in codes:
@@ -1691,6 +1715,10 @@ def add_code(phone, code):
         "id": "C" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10)),
         "phone": phone,
         "code": code,
+        "platform": platform or "",
+        "country": country or "",
+        "brand": brand or "",
+        "source": source or "",
         "timestamp": now
     }
     codes.append(new_code)
@@ -1874,6 +1902,271 @@ def set_current_platform(p):
             f.write(p or "")
     except Exception as e:
         print("[PLATFORM] save error:", e)
+
+
+
+
+# ═══════════════════════════════════════════
+# EXTERNAL API — سحب الأكواد من API خارجي
+# ═══════════════════════════════════════════
+_external_api_seen = set()
+_external_api_last_fetch = {"time": 0, "count": 0, "status": "idle", "error": ""}
+
+def fetch_external_codes():
+    """يجلب الأكواد من API الخارجي"""
+    s = load_settings()
+    url_base = (s.get("external_api_url") or "").strip().rstrip("/")
+    token = (s.get("external_api_token") or "").strip()
+    if not url_base or not token:
+        return []
+    # جرب عدة مسارات
+    paths = ["/api/v1/codes", "/api/codes", "/codes"]
+    for path in paths:
+        try:
+            import urllib.request as _ur
+            req = _ur.Request(
+                url_base + path + "?limit=50",
+                headers={"X-API-Token": token, "Accept": "application/json"}
+            )
+            with _ur.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            codes = []
+            if isinstance(data, list):
+                codes = data
+            elif isinstance(data, dict):
+                codes = data.get("codes") or data.get("data") or data.get("messages") or []
+            if codes is not None:
+                return codes
+        except Exception as e:
+            _external_api_last_fetch["error"] = str(e)[:200]
+            continue
+    return []
+
+
+
+# ═══════════════════════════════════════════
+# SMART BIND — الربط الذكي بين الأرقام والمنصات
+# ═══════════════════════════════════════════
+def _normalize_phone(p):
+    """توحيد شكل الرقم"""
+    p = re.sub(r"[^\d+]", "", str(p or ""))
+    if p.startswith("+"):
+        p = p[1:]
+    return p
+
+def _find_phone_in_tree(phone):
+    """يبحث عن الرقم في TREE ويُرجع (platform, country)"""
+    norm = _normalize_phone(phone)
+    if not norm:
+        return None, None
+    try:
+        tree = get_numbers_tree()
+    except Exception:
+        return None, None
+    tail = norm[-9:] if len(norm) >= 9 else norm
+    for platform, countries in (tree or {}).items():
+        for country, nums in (countries or {}).items():
+            for n in nums:
+                nn = _normalize_phone(n)
+                if nn == norm or nn.endswith(tail) or tail.endswith(nn[-9:]):
+                    return platform, country
+    return None, None
+
+def _brand_to_platform(brand):
+    """يحول brand (WA/WhatsApp/IM) إلى منصة عربية"""
+    if not brand:
+        return None, None
+    b = str(brand).strip().upper()
+    m = {
+        "WA": "واتساب", "WS": "واتساب", "WB": "واتساب", "WHATSAPP": "واتساب",
+        "TG": "تيليجرام", "IM": "تيليجرام", "TELEGRAM": "تيليجرام",
+        "FB": "فيسبوك", "FACEBOOK": "فيسبوك",
+        "IG": "انستقرام", "INSTAGRAM": "انستقرام",
+        "TW": "تويتر", "X": "تويتر", "TWITTER": "تويتر",
+        "GG": "جوجل", "GOOGLE": "جوجل",
+        "AP": "آبل", "APPLE": "آبل",
+        "TT": "تيك توك", "TIKTOK": "تيك توك",
+        "DC": "ديسكورد", "DISCORD": "ديسكورد",
+        "SC": "سناب", "SNAPCHAT": "سناب",
+    }
+    return m.get(b), b
+
+def smart_bind_code(item):
+    """يحلل الكود القادم من API ويربطه بالمنصة الصحيحة"""
+    result = {
+        "phone": "", "code": "", "brand": "", "platform": "",
+        "country": "", "message": "", "source": "external_api",
+        "bound_by": "none"
+    }
+    if not isinstance(item, dict):
+        return result
+
+    phone = (item.get("phone_number") or item.get("phone_normalized")
+             or item.get("phone") or item.get("number") or item.get("to") or "")
+    code_val = (item.get("otp_code") or item.get("code") or item.get("otp") or "")
+    msg = (item.get("message_text") or item.get("message") or item.get("text") or "")
+    app = (item.get("app_name") or item.get("service") or item.get("app") or "")
+
+    if not code_val and msg:
+        m = re.findall(r"\b(\d{4,8})\b", msg)
+        if m:
+            code_val = m[0]
+
+    result["phone"] = str(phone)
+    result["code"] = str(code_val)
+    result["brand"] = str(app)
+    result["message"] = str(msg)
+
+    # 1) الربط بالرقم
+    platform, country = _find_phone_in_tree(phone)
+    if platform:
+        result["platform"] = platform
+        result["country"] = country
+        result["bound_by"] = "phone"
+        return result
+
+    # 2) الربط بالـ brand
+    p2, b2 = _brand_to_platform(app)
+    if p2:
+        result["platform"] = p2
+        result["bound_by"] = "brand"
+        return result
+
+    # 3) fallback
+    result["platform"] = "غير مصنّف"
+    result["bound_by"] = "fallback"
+    return result
+
+
+
+def external_api_poll():
+    """يسحب من API الخارجي — مع الربط الذكي"""
+    global _external_api_seen
+    print("[EXT-API] smart poller started")
+    while True:
+        try:
+            s = load_settings()
+            if not s.get("external_api_enabled"):
+                time.sleep(10)
+                continue
+            smart = bool(s.get("external_api_smart_bind", True))
+            auto_push = bool(s.get("external_api_auto_push", True))
+            codes = fetch_external_codes()
+            _external_api_last_fetch["time"] = time.time()
+            _external_api_last_fetch["count"] = len(codes)
+            if codes:
+                _external_api_last_fetch["status"] = "ok"
+                _external_api_last_fetch["error"] = ""
+                new = 0
+                for item in codes:
+                    if not isinstance(item, dict):
+                        continue
+                    cid = str(item.get("id") or item.get("otp_code") or item.get("code") or
+                              json.dumps({k: item.get(k) for k in ("phone_number","otp_code") if k in item}, sort_keys=True))
+                    if cid in _external_api_seen:
+                        continue
+                    _external_api_seen.add(cid)
+                    new += 1
+
+                    # ═══ الربط الذكي ═══
+                    if smart:
+                        bind = smart_bind_code(item)
+                    else:
+                        bind = {
+                            "phone": str(item.get("phone_number") or item.get("phone") or ""),
+                            "code": str(item.get("otp_code") or item.get("code") or ""),
+                            "brand": str(item.get("app_name") or ""),
+                            "platform": "غير مصنّف",
+                            "country": "",
+                            "message": str(item.get("message_text") or ""),
+                            "source": "external_api",
+                            "bound_by": "none"
+                        }
+
+                    if not bind["phone"] or not bind["code"]:
+                        continue
+
+                    # ═══ خزنه في codes.json ═══
+                    try:
+                        codes_list = load_codes()
+                        now = time.time()
+                        # منع التكرار
+                        exists = False
+                        for c in codes_list:
+                            if (c.get("phone") == bind["phone"]
+                                and c.get("code") == bind["code"]
+                                and (now - c.get("timestamp", 0)) < 300):
+                                exists = True
+                                break
+                        if not exists:
+                            new_code = {
+                                "id": "C" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10)),
+                                "phone": bind["phone"],
+                                "code": bind["code"],
+                                "platform": bind["platform"],
+                                "country": bind["country"],
+                                "brand": bind["brand"],
+                                "source": bind["source"],
+                                "bound_by": bind["bound_by"],
+                                "message": bind["message"][:200],
+                                "timestamp": now
+                            }
+                            codes_list.append(new_code)
+                            if len(codes_list) > 500:
+                                codes_list = codes_list[-500:]
+                            save_codes(codes_list)
+                            print(f"[SMART-BIND] ✅ {bind['platform']} | {bind['country']} | {bind['phone'][-5:]} | {bind['code']} | via={bind['bound_by']}")
+                    except Exception as _e:
+                        print("[SMART-BIND] save err:", _e)
+
+                    # ═══ خزنه في الذاكرة (للتوافق القديم) ═══
+                    try:
+                        _telegram_codes.append({
+                            "phone_last": bind["phone"][-5:] if len(bind["phone"]) >= 5 else bind["phone"],
+                            "code": bind["code"],
+                            "brand": bind["brand"],
+                            "flag": "",
+                            "platform": bind["platform"],
+                            "country": bind["country"],
+                            "full_msg": bind["message"],
+                            "timestamp": time.time()
+                        })
+                        if len(_telegram_codes) > 500:
+                            _telegram_codes.pop(0)
+                    except Exception:
+                        pass
+
+                    # ═══ Push ذكي ═══
+                    if auto_push:
+                        try:
+                            send_push_to_all(
+                                title="كود جديد — " + (bind["platform"] or "API"),
+                                body="الرقم: " + bind["phone"][-5:] + "\nالكود: " + bind["code"],
+                                url="/"
+                            )
+                        except Exception:
+                            pass
+
+                if new:
+                    print(f"[EXT-API] +{new} كود جديد (إجمالي: {len(codes)})")
+            else:
+                _external_api_last_fetch["status"] = "empty"
+        except Exception as e:
+            _external_api_last_fetch["status"] = "error"
+            _external_api_last_fetch["error"] = str(e)[:200]
+            print("[EXT-API] err:", e)
+        time.sleep(10)
+
+
+def start_external_api_poller():
+    """يبدأ poller في thread"""
+    try:
+        import threading as _th
+        t = _th.Thread(target=external_api_poll, daemon=True)
+        t.start()
+        print("[EXT-API] thread started")
+    except Exception as e:
+        print("[EXT-API] start err:", e)
 
 
 def telegram_bot_loop():
@@ -2189,6 +2482,31 @@ MAIN_HTML = r"""
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <title>{{ site_name }}</title>
+
+<style>
+/* ═══ تخصيص الألوان — تطبيق فعلي ═══ */
+{% if custom_bg_color %}
+body{background:{{ custom_bg_color }} !important}
+.code-bg{background:{{ custom_bg_color }} !important}
+{% endif %}
+{% if custom_text_color %}
+body, .card-name, .num-phone, .title-text{color:{{ custom_text_color }} !important}
+{% endif %}
+{% if custom_header_color %}
+.header{background:{{ custom_header_color }} !important}
+.bottom-nav{background:{{ custom_header_color }} !important}
+{% endif %}
+{% if custom_btn_color %}
+.page-title{background:linear-gradient(135deg,{{ custom_btn_color }},{{ custom_color_gradient2 or secondary }}) !important}
+.copy-btn{background:linear-gradient(135deg,{{ custom_btn_color }},{{ custom_color_gradient2 or secondary }}) !important}
+.auto-fetch-btn{background:linear-gradient(135deg,{{ custom_btn_color }},{{ custom_color_gradient2 or secondary }}) !important}
+.card-count{background:linear-gradient(135deg,{{ custom_btn_color }},{{ custom_color_gradient2 or secondary }}) !important}
+{% endif %}
+{% if custom_color_card %}
+.card, .num-card, .code-card{background:{{ custom_color_card }} !important}
+{% endif %}
+</style>
+
 <script>
 (function(){
     try {
@@ -2228,7 +2546,7 @@ img{content-visibility:auto}
 /* تحسين للأجهزة عالية التردد */
 @media(min-resolution:2dppx){body{-webkit-font-smoothing:antialiased}}
 
-:root{--bg:#f7f7fa;--card:#fff;--text:#0a0a0f;--text2:#6e6e78;--border:rgba(0,0,0,0.06);--primary:{{ primary }};--secondary:{{ secondary }};--shadow:0 4px 20px rgba(0,0,0,0.06);--nav-bg:rgba(255,255,255,0.85);--gradient:linear-gradient(135deg,{{ primary }},{{ secondary }})}
+:root{--bg:{{ custom_bg_color or "#f7f7fa" }};--card:{{ custom_color_card or "#fff" }};--text:{{ custom_text_color or "#0a0a0f" }};--text2:#6e6e78;--border:rgba(0,0,0,0.06);--primary:{{ custom_btn_color or primary }};--secondary:{{ custom_color_gradient2 or secondary }};--shadow:0 4px 20px rgba(0,0,0,0.06);--nav-bg:{{ custom_header_color or "rgba(255,255,255,0.85)" }};--gradient:linear-gradient(135deg,{{ custom_btn_color or primary }},{{ custom_color_gradient2 or secondary }})}
 [data-theme="dark"]{--bg:#0a0a12;--card:#16161f;--text:#f5f5f7;--text2:#8e8e93;--border:rgba(255,255,255,0.06);--nav-bg:rgba(18,18,28,0.85)}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
@@ -2254,7 +2572,7 @@ img,svg,video{max-width:100%;height:auto}
 html{scroll-behavior:smooth}
 /* تقليل الأنيميشن على الأجهزة الضعيفة */
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;transition-duration:.01ms !important}}
-.header{position:fixed;top:0;left:0;right:0;height:64px;background:var(--nav-bg);backdrop-filter:blur(24px);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 14px;z-index:100}
+.header{position:fixed;top:0;left:0;right:0;height:64px;background:var(--header-bg);backdrop-filter:blur(24px);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 14px;z-index:100}
 .title{font-size:17px;font-weight:800;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px}
 .title-text{background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:800;display:inline-flex;align-items:center;gap:8px}
 
@@ -2304,7 +2622,7 @@ html{scroll-behavior:smooth}
 .switch-btn{flex:1;padding:14px 18px;border:none;border-radius:16px;background:var(--gradient);color:#fff;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 4px 14px rgba(30,58,138,.25)}
 .switch-btn:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
 .switch-indicator{font-size:13px;font-weight:700;color:var(--text2);padding:10px 16px;background:var(--card);border-radius:12px;border:1px solid var(--border);white-space:nowrap;min-width:70px;text-align:center}
-.bottom-nav{position:fixed;bottom:0;left:0;right:0;height:68px;background:var(--nav-bg);backdrop-filter:blur(24px);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-around;z-index:100;padding:0 8px}
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;height:68px;background:{{ custom_header_color or "var(--nav-bg)" }};backdrop-filter:blur(24px);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-around;z-index:100;padding:0 8px}
 
 
 .nav-btn{flex:1;height:100%;border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--text2);border-radius:12px;margin:6px 2px;position:relative;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transform:translateZ(0);will-change:transform;backface-visibility:hidden}
@@ -2875,7 +3193,7 @@ html.lite-mode .offline-bar {
 </svg>
 </button>
 <span class="title-text" id="headerTitle" style="display:flex;align-items:center;gap:10px;font-size:18px">
-<svg viewBox="0 0 80 60" width="72" height="54" style="flex-shrink:0;overflow:visible">
+{% if custom_header_icon_svg %}{{ custom_header_icon_svg|safe }}{% else %}<svg viewBox="0 0 80 60" width="72" height="54" style="flex-shrink:0;overflow:visible">
 <defs>
 <linearGradient id="skin" x1="0%" y1="0%" x2="0%" y2="100%">
 <stop offset="0%" stop-color="#F5C9A0"/>
@@ -2897,105 +3215,23 @@ html.lite-mode .offline-bar {
 <stop offset="0%" stop-color="#2a1810"/>
 <stop offset="100%" stop-color="#4a2c1a"/>
 </linearGradient>
-<filter id="shadow">
-<feGaussianBlur stdDeviation="0.4"/>
-</filter>
 </defs>
-
-<!-- ظل أرضي -->
 <ellipse cx="30" cy="57" rx="16" ry="2" fill="#000" opacity="0.25"/>
-
-<!-- جسم/قميص -->
-<path d="M 12 56 Q 12 36 30 36 Q 48 36 48 56 Z" fill="url(#shirt)">
-<animate attributeName="d" values="M 12 56 Q 12 36 30 36 Q 48 36 48 56 Z;M 12 55 Q 12 35 30 35 Q 48 35 48 55 Z;M 12 56 Q 12 36 30 36 Q 48 36 48 56 Z" dur="2.5s" repeatCount="indefinite"/>
-</path>
-
-<!-- رقبة -->
+<path d="M 12 56 Q 12 36 30 36 Q 48 36 48 56 Z" fill="url(#shirt)"/>
 <rect x="26" y="30" width="8" height="8" fill="url(#skin)"/>
-
-<!-- رأس -->
-<ellipse cx="30" cy="22" rx="10" ry="11" fill="url(#skin)">
-<animate attributeName="cy" values="22;21;22" dur="2.5s" repeatCount="indefinite"/>
-</ellipse>
-
-<!-- شعر -->
-<path d="M 20 18 Q 22 8 30 8 Q 38 8 40 18 Q 38 12 30 12 Q 22 12 20 18 Z" fill="url(#hair)">
-<animate attributeName="d" values="M 20 18 Q 22 8 30 8 Q 38 8 40 18 Q 38 12 30 12 Q 22 12 20 18 Z;M 20 17 Q 22 7 30 7 Q 38 7 40 17 Q 38 11 30 11 Q 22 11 20 17 Z;M 20 18 Q 22 8 30 8 Q 38 8 40 18 Q 38 12 30 12 Q 22 12 20 18 Z" dur="2.5s" repeatCount="indefinite"/>
-</path>
-<path d="M 20 18 Q 18 14 20 12 Q 22 14 22 18 Z" fill="url(#hair)"/>
-<path d="M 40 18 Q 42 14 40 12 Q 38 14 38 18 Z" fill="url(#hair)"/>
-
-<!-- عيون -->
-<circle cx="26" cy="21" r="1.2" fill="#1a1a1a">
-<animate attributeName="r" values="1.2;1.2;0.2;1.2" dur="4s" repeatCount="indefinite"/>
-</circle>
-<circle cx="34" cy="21" r="1.2" fill="#1a1a1a">
-<animate attributeName="r" values="1.2;1.2;0.2;1.2" dur="4s" repeatCount="indefinite"/>
-</circle>
-<circle cx="26.3" cy="20.7" r="0.4" fill="#fff"/>
-<circle cx="34.3" cy="20.7" r="0.4" fill="#fff"/>
-
-<!-- فم مبتسم -->
+<ellipse cx="30" cy="22" rx="10" ry="11" fill="url(#skin)"/>
+<path d="M 20 18 Q 22 8 30 8 Q 38 8 40 18 Q 38 12 30 12 Q 22 12 20 18 Z" fill="url(#hair)"/>
+<circle cx="26" cy="21" r="1.2" fill="#1a1a1a"/>
+<circle cx="34" cy="21" r="1.2" fill="#1a1a1a"/>
 <path d="M 27 26 Q 30 28 33 26" stroke="#8B4513" stroke-width="0.9" fill="none" stroke-linecap="round"/>
-
-<!-- ذراع يمسك الهاتف -->
-<path d="M 42 42 Q 50 40 54 36" stroke="url(#shirt)" stroke-width="4" stroke-linecap="round" fill="none">
-<animate attributeName="d" values="M 42 42 Q 50 40 54 36;M 42 41 Q 50 39 54 35;M 42 42 Q 50 40 54 36" dur="2.5s" repeatCount="indefinite"/>
-</path>
-
-<!-- يد -->
+<path d="M 42 42 Q 50 40 54 36" stroke="url(#shirt)" stroke-width="4" stroke-linecap="round" fill="none"/>
 <ellipse cx="55" cy="35" rx="3" ry="2.5" fill="url(#skin)"/>
-
-<!-- الهاتف الذكي -->
-<g>
-<animate attributeName="transform" type="translate" values="0,0; 0,-1; 0,0" dur="2.5s" repeatCount="indefinite"/>
 <rect x="51" y="22" width="14" height="24" rx="2.5" fill="url(#phone)" stroke="#334155" stroke-width="0.6"/>
 <rect x="52.2" y="23.5" width="11.6" height="19" rx="1.5" fill="url(#screen)"/>
-<!-- خطوط داخل الشاشة (محاكاة تطبيق) -->
-<rect x="53.5" y="25" width="9" height="1.5" rx="0.5" fill="#ffffff" opacity="0.4"/>
-<rect x="53.5" y="27.5" width="7" height="1.5" rx="0.5" fill="#ffffff" opacity="0.3"/>
-<rect x="53.5" y="30" width="9" height="1.5" rx="0.5" fill="#ffffff" opacity="0.3"/>
-
-<!-- كلمة OTP تظهر حرف حرف -->
-<text x="58" y="38" font-size="4.5" font-weight="900" fill="#ffffff" text-anchor="middle" font-family="monospace">
-<animate attributeName="opacity" values="1" dur="1s"/>
-</text>
-<!-- O -->
-<text x="54.5" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">O
-<animate attributeName="opacity" values="0;1;1;1;0" dur="3s" repeatCount="indefinite" begin="0s"/>
-</text>
-<!-- T -->
-<text x="58" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">T
-<animate attributeName="opacity" values="0;0;1;1;0" dur="3s" repeatCount="indefinite" begin="0s"/>
-</text>
-<!-- P -->
-<text x="61.5" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">P
-<animate attributeName="opacity" values="0;0;0;1;0" dur="3s" repeatCount="indefinite" begin="0s"/>
-</text>
-</g>
-
-<!-- وميض الشاشة -->
-<rect x="51" y="22" width="14" height="24" rx="2.5" fill="#00d4ff" opacity="0">
-<animate attributeName="opacity" values="0;0.15;0" dur="2s" repeatCount="indefinite"/>
-</rect>
-
-<!-- إشارات wifi/otp تخرج من الهاتف -->
-<circle cx="68" cy="20" r="1.5" fill="#00d4ff">
-<animate attributeName="opacity" values="0;1;0" dur="1.8s" repeatCount="indefinite"/>
-<animate attributeName="cy" values="22;14;6" dur="1.8s" repeatCount="indefinite"/>
-<animate attributeName="cx" values="66;68;70" dur="1.8s" repeatCount="indefinite"/>
-</circle>
-<circle cx="70" cy="22" r="1.2" fill="#7b2ff7">
-<animate attributeName="opacity" values="0;1;0" dur="1.8s" repeatCount="indefinite" begin="0.6s"/>
-<animate attributeName="cy" values="24;16;8" dur="1.8s" repeatCount="indefinite" begin="0.6s"/>
-<animate attributeName="cx" values="68;71;74" dur="1.8s" repeatCount="indefinite" begin="0.6s"/>
-</circle>
-<circle cx="72" cy="24" r="1" fill="#00d4a5">
-<animate attributeName="opacity" values="0;1;0" dur="1.8s" repeatCount="indefinite" begin="1.2s"/>
-<animate attributeName="cy" values="26;18;10" dur="1.8s" repeatCount="indefinite" begin="1.2s"/>
-<animate attributeName="cx" values="70;73;76" dur="1.8s" repeatCount="indefinite" begin="1.2s"/>
-</circle>
-</svg>
+<text x="54.5" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">O</text>
+<text x="58" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">T</text>
+<text x="61.5" y="38" font-size="4.5" font-weight="900" fill="#00d4a5" font-family="monospace">P</text>
+</svg>{% endif %}</svg>
 <span class="brand-text" style="font-weight:800;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">المطري OTP</span>
 </span>
 </div>
@@ -3039,10 +3275,10 @@ html.lite-mode .offline-bar {
 </a>
 
 <div class="bottom-nav">
-<button class="nav-btn active" id="nav_home" onclick="navTo('platforms')"><svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg><span id="nav_home_txt">الرئيسية</span></button>
-<button class="nav-btn" id="nav_support" onclick="openMySupport()"><span style="position:relative;display:inline-flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg><span id="supportBadge" style="display:none;position:absolute;top:-6px;right:-8px;background:#e94560;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;padding:0 4px;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(233,69,96,.7);border:1.5px solid var(--card);line-height:1">0</span></span><span id="nav_support_txt">الدعم</span></button>
-<button class="nav-btn" onclick="toggleTheme()"><svg viewBox="0 0 24 24" id="darkIcon"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg><span id="nav_dark_txt">ليلي</span></button>
-<button class="nav-btn" onclick="toggleLang()"><svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04z"/></svg><span id="nav_lang_txt">EN</span></button>
+<button class="nav-btn active" id="nav_home" onclick="navTo('platforms')">{% if custom_icon_home %}{{ custom_icon_home|safe }}{% else %}<svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>{% endif %}<span id="nav_home_txt">الرئيسية</span></button>
+<button class="nav-btn" id="nav_support" onclick="openMySupport()"><span style="position:relative;display:inline-flex;align-items:center;justify-content:center">{% if custom_icon_support %}{{ custom_icon_support|safe }}{% else %}<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>{% endif %}<span id="supportBadge" style="display:none;position:absolute;top:-6px;right:-8px;background:#e94560;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;padding:0 4px;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(233,69,96,.7);border:1.5px solid var(--card);line-height:1">0</span></span><span id="nav_support_txt">الدعم</span></button>
+<button class="nav-btn" onclick="toggleTheme()">{% if custom_icon_dark %}{{ custom_icon_dark|safe }}{% else %}<svg viewBox="0 0 24 24" id="darkIcon"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>{% endif %}<span id="nav_dark_txt">ليلي</span></button>
+<button class="nav-btn" onclick="toggleLang()">{% if custom_icon_lang %}{{ custom_icon_lang|safe }}{% else %}<svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04z"/></svg>{% endif %}<span id="nav_lang_txt">EN</span></button>
 </div>
 
 <!-- ==== خلفية مبرمجين ==== -->
@@ -6384,6 +6620,10 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 <h1>لوحة الأدمن</h1>
 <div class="sub"><span class="dot"></span> متصل · الإصدار 1.0</div>
 </div>
+<button type="button" class="cache-btn" onclick="adminClearCache()" title="مسح كاش جميع المستخدمين">
+<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+مسح الكاش
+</button>
 <a href="/admin/logout" class="logout">
 <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
 خروج
@@ -6451,6 +6691,14 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 <span>صيانة</span>
 </button>
 
+<button class="tb" onclick="showTab('custom',event)">
+<svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+<span>تخصيص</span>
+</button>
+<button class="tb" onclick="showTab('external',event)">
+<svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15l3.5-4.5 2.5 3.01L14.5 9l4.5 6H5z"/></svg>
+<span>API خارجي</span>
+</button>
 <button class="tb" onclick="showTab('preview',event)">
 <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
 <span>معاينة</span>
@@ -6534,6 +6782,416 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 <div class="info-box err">حذف كل الأرقام لا يمكن الرجوع عنه</div>
 <a href="/admin/clear-numbers" class="btn btn-red" onclick="return confirm('مسح؟')"><svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg> مسح كل الأرقام</a>
 </div></div>
+
+<!-- ═══ تبويب External API ═══ -->
+<div class="pane" id="pane-external">
+<div class="card">
+<h2>
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#00d4ff;vertical-align:middle;margin-left:6px"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15l3.5-4.5 2.5 3.01L14.5 9l4.5 6H5z"/></svg>
+مصدر API الخارجي
+</h2>
+
+<div class="info-box">اربط موقعك بـ API خارجي لسحب الأكواد تلقائياً — يشتغل كل 10 ثواني.</div>
+
+<form method="POST" action="/admin/external-api/save">
+
+<label>رابط API (Base URL)</label>
+<input type="text" name="external_api_url" value="{{ s.external_api_url or 'http://78.154.103.39:11105' }}" dir="ltr" placeholder="http://example.com:11105" style="font-family:monospace">
+
+<label>API Token</label>
+<input type="text" name="external_api_token" value="{{ s.external_api_token or '' }}" dir="ltr" placeholder="الصق التوكن هنا" style="font-family:monospace">
+
+<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(0,212,255,.08);padding:14px;border-radius:12px;margin-top:16px">
+<input type="checkbox" name="external_api_enabled" {% if s.external_api_enabled %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
+<b style="color:#00d4ff;font-size:14px">تفعيل السحب التلقائي</b>
+</label>
+
+<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(0,212,165,.08);padding:14px;border-radius:12px;margin-top:10px">
+<input type="checkbox" name="external_api_smart_bind" {% if s.external_api_smart_bind %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
+<b style="color:#00d4a5;font-size:14px">🧠 الربط الذكي (ربط الكود بالمنصة تلقائياً)</b>
+</label>
+
+<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(251,191,36,.08);padding:14px;border-radius:12px;margin-top:10px">
+<input type="checkbox" name="external_api_auto_push" {% if s.external_api_auto_push %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
+<b style="color:#fbbf24;font-size:14px">🔔 إرسال Push تلقائي</b>
+</label>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
+<button type="submit" class="btn btn-green" style="margin-top:0">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4z"/></svg>
+حفظ
+</button>
+<button type="button" class="btn btn-orange" style="margin-top:0" onclick="extApiTest()">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+فحص الاتصال
+</button>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+<button type="button" class="btn btn-grad" style="margin-top:0" onclick="extApiFetchNow()">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
+سحب يدوي الآن
+</button>
+<button type="button" class="btn btn-grad" style="margin-top:0;background:linear-gradient(135deg,#7b2ff7,#00d4ff)" onclick="extApiStatus()">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+تحديث الحالة
+</button>
+</div>
+
+<div id="extApiResult" style="margin-top:14px;padding:14px;border-radius:10px;background:rgba(0,0,0,.3);font-size:13px;display:none;white-space:pre-line;direction:ltr;text-align:left;font-family:monospace"></div>
+
+</form>
+</div>
+</div>
+
+<script>
+function extApiTest(){
+    var b = document.getElementById("extApiResult");
+    b.style.display = "block"; b.style.color = "#00d4ff"; b.textContent = "جاري الفحص...";
+    fetch("/admin/external-api/test").then(function(r){return r.json()}).then(function(d){
+        if(d.ok){
+            b.style.color = "#00d4a5";
+            b.textContent = "✅ الاتصال ناجح\nالمسار: " + d.path + "\nالحالة: " + d.status + "\nعدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
+        } else {
+            b.style.color = "#ff6b8a";
+            b.textContent = "❌ فشل: " + (d.error || "غير معروف");
+        }
+    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
+}
+function extApiFetchNow(){
+    var b = document.getElementById("extApiResult");
+    b.style.display = "block"; b.style.color = "#ffcb6b"; b.textContent = "جاري السحب...";
+    fetch("/admin/external-api/fetch-now").then(function(r){return r.json()}).then(function(d){
+        if(d.ok){
+            b.style.color = "#00d4a5";
+            b.textContent = "✅ تم السحب — عدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
+        } else {
+            b.style.color = "#ff6b8a"; b.textContent = "❌ فشل";
+        }
+    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
+}
+function extApiStatus(){
+    var b = document.getElementById("extApiResult");
+    b.style.display = "block"; b.style.color = "#00d4ff"; b.textContent = "جاري التحميل...";
+    fetch("/admin/external-api/status").then(function(r){return r.json()}).then(function(d){
+        b.style.color = "#00d4ff";
+        b.textContent =
+            "📊 حالة API الخارجي\n" +
+            "الرابط: " + d.url + "\n" +
+            "التوكن: " + (d.has_token ? "✓" : "✗") + "\n" +
+            "مفعّل: " + (d.enabled ? "✓" : "✗") + "\n" +
+            "آخر سحب: " + (d.last_fetch ? new Date(d.last_fetch*1000).toLocaleString() : "لا يوجد") + "\n" +
+            "آخر عدد: " + d.last_count + "\n" +
+            "الحالة: " + d.last_status + "\n" +
+            "الخطأ: " + (d.last_error || "لا يوجد") + "\n" +
+            "أكواد في الذاكرة: " + d.codes_in_memory;
+    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
+}
+</script>
+
+<!-- ═══ تبويب التخصيص ═══ -->
+<div class="pane" id="pane-custom">
+<style>
+.custom-section{background:linear-gradient(160deg,#10101e,#0a0a14);border:1px solid rgba(123,47,247,.2);border-radius:16px;padding:16px;margin-bottom:14px}
+.custom-section h2{font-size:14px;color:#00d4ff;margin-bottom:14px;font-weight:800;display:flex;align-items:center;gap:8px}
+.custom-section h2 svg{width:18px;height:18px;fill:#00d4ff}
+.custom-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.custom-row:last-child{border-bottom:none}
+.custom-row label{flex:1;font-size:13px;color:#c8c8d8;font-weight:600;margin:0}
+.custom-row input[type=color]{width:50px;height:38px;padding:2px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.4);cursor:pointer}
+.custom-row input[type=text]{flex:1;padding:10px 12px;font-size:13px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.35);color:#e8e8f0;outline:none;font-family:inherit;max-width:220px}
+.custom-row input[type=text]:focus{border-color:#7b2ff7}
+.custom-row .hint{font-size:10px;color:#6e6e8a;margin-top:2px}
+.custom-row input[type=checkbox]{width:auto;transform:scale(1.4);margin:0;cursor:pointer}
+.custom-help{background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.2);border-radius:10px;padding:10px 12px;font-size:11px;color:#8ee4ff;line-height:1.7;margin-bottom:14px}
+.custom-help b{color:#00d4ff}
+.custom-preview{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.custom-pill{padding:8px 14px;border-radius:10px;font-size:12px;font-weight:700;color:#fff;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.15)}
+</style>
+
+<form method="POST" action="/admin/custom/save">
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+الألوان
+</h2>
+
+<div class="custom-help">
+<b>اترك الحقل فاضي</b> لاستخدام اللون الافتراضي من الإعدادات
+</div>
+
+<div class="custom-row">
+<label>لون الخلفية
+<div class="hint">الخلفية الرئيسية للموقع</div>
+</label>
+<input type="color" name="custom_bg_color" value="{{ s.custom_bg_color or '#f7f7fa' }}">
+</div>
+
+<div class="custom-row">
+<label>لون النص
+<div class="hint">لون النصوص الأساسية</div>
+</label>
+<input type="color" name="custom_text_color" value="{{ s.custom_text_color or '#0a0a0f' }}">
+</div>
+
+<div class="custom-row">
+<label>لون الهيدر
+<div class="hint">الشريط العلوي</div>
+</label>
+<input type="color" name="custom_header_color" value="{{ s.custom_header_color or '#ffffff' }}">
+</div>
+
+<div class="custom-row">
+<label>لون الأزرار
+<div class="hint">الأزرار الرئيسية والبطاقات</div>
+</label>
+<input type="color" name="custom_btn_color" value="{{ s.custom_btn_color or '#1e3a8a' }}">
+</div>
+
+</div>
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+النصوص
+</h2>
+
+<div class="custom-help">
+<b>اترك الحقل فاضي</b> لاستخدام النص الافتراضي
+</div>
+
+<div class="custom-row">
+<label>اسم الموقع
+<div class="hint">يظهر في الهيدر والعنوان</div>
+</label>
+<input type="text" name="custom_title_text" value="{{ s.custom_title_text or '' }}" placeholder="{{ s.site_name or 'المطري OTP' }}">
+</div>
+
+<div class="custom-row">
+<label>عنوان "اختر المنصة"
+<div class="hint">الصفحة الرئيسية</div>
+</label>
+<input type="text" name="custom_platform_title" value="{{ s.custom_platform_title or '' }}" placeholder="اختر المنصة">
+</div>
+
+<div class="custom-row">
+<label>عنوان "الأرقام"
+<div class="hint">صفحة الأرقام</div>
+</label>
+<input type="text" name="custom_numbers_title" value="{{ s.custom_numbers_title or '' }}" placeholder="الأرقام">
+</div>
+
+<div class="custom-row">
+<label>زر "الأكواد الواصلة"
+<div class="hint">الزر البرتقالي</div>
+</label>
+<input type="text" name="custom_codes_text" value="{{ s.custom_codes_text or '' }}" placeholder="الأكواد الواصلة">
+</div>
+
+<div class="custom-row">
+<label>زر "تحديث OTP"
+<div class="hint">الزر الأزرق السفلي</div>
+</label>
+<input type="text" name="custom_fetch_text" value="{{ s.custom_fetch_text or '' }}" placeholder="تحديث OTP">
+</div>
+
+</div>
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+التثبيت
+</h2>
+
+<div class="custom-help">
+<b>التثبيت</b> يعني العنصر يبقى ثابت أثناء التمرير
+</div>
+
+<div class="custom-row">
+<label>تثبيت الهيدر
+<div class="hint">الشريط العلوي يبقى ثابت</div>
+</label>
+<input type="checkbox" name="custom_sticky_header" {% if s.custom_sticky_header %}checked{% endif %}>
+</div>
+
+<div class="custom-row">
+<label>تثبيت الشريط السفلي
+<div class="hint">الأزرار السفلية تبقى ثابتة</div>
+</label>
+<input type="checkbox" name="custom_sticky_nav" {% if s.custom_sticky_nav %}checked{% endif %}>
+</div>
+
+</div>
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+معاينة سريعة
+</h2>
+<div class="custom-preview">
+<span class="custom-pill" style="background:{{ s.custom_btn_color or '#1e3a8a' }}">زر أساسي</span>
+<span class="custom-pill" style="background:{{ s.custom_header_color or '#fff' }};color:#000">هيدر</span>
+<span class="custom-pill" style="background:{{ s.custom_bg_color or '#f7f7fa' }};color:#000">خلفية</span>
+<span class="custom-pill" style="background:#00d4ff">معلومات</span>
+</div>
+</div>
+
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+الأيقونة الرئيسية (الهيدر)
+</h2>
+
+<div class="custom-help">
+<b>الصق SVG مخصص</b> لتغيير أيقونة الرجل اللي ماسك الهاتف. اتركه فاضي للنسخة الافتراضية.
+</div>
+
+<textarea name="custom_header_icon_svg" id="iconSvgInput" rows="6" style="width:100%;padding:12px;font-family:monospace;font-size:11px;direction:ltr;text-align:left;resize:vertical;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:10px;color:#e8e8f0;outline:none;min-height:100px" placeholder="&lt;svg viewBox=&quot;0 0 60 60&quot;&gt;...&lt;/svg&gt;" oninput="previewHeaderIcon()">{{ s.custom_header_icon_svg or '' }}</textarea>
+
+<div style="display:flex;gap:8px;margin-top:10px">
+<button type="button" onclick="loadSampleIcon()" class="btn btn-orange" style="margin-top:0;font-size:12px;padding:10px;flex:1">تجربة SVG جاهز</button>
+<button type="button" onclick="clearHeaderIcon()" class="btn btn-red" style="margin-top:0;font-size:12px;padding:10px;flex:1">مسح</button>
+</div>
+
+<div style="margin-top:12px;padding:14px;background:rgba(0,0,0,.3);border:1px solid rgba(0,212,255,.25);border-radius:12px;text-align:center">
+<div style="font-size:11px;color:#6e6e8a;margin-bottom:8px">معاينة مباشرة:</div>
+<div id="headerIconPreview" style="display:inline-block;width:72px;height:54px;overflow:visible">
+{{ s.custom_header_icon_svg|safe if s.custom_header_icon_svg else '<span style="color:#6e6e8a;font-size:11px;display:block;line-height:54px">افتراضي</span>' }}
+</div>
+</div>
+
+</div>
+
+<script>
+function previewHeaderIcon(){
+    var svg = document.getElementById('iconSvgInput').value.trim();
+    var preview = document.getElementById('headerIconPreview');
+    if(!svg){
+        preview.innerHTML = '<span style="color:#6e6e8a;font-size:11px;display:block;line-height:54px">افتراضي</span>';
+        return;
+    }
+    preview.innerHTML = svg;
+    preview.querySelectorAll('svg').forEach(function(s){
+        s.style.width = '72px';
+        s.style.height = '54px';
+        s.style.overflow = 'visible';
+    });
+}
+function loadSampleIcon(){
+    var sample = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><defs><linearGradient id="mg1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#7b2ff7"/><stop offset="100%" stop-color="#00d4ff"/></linearGradient></defs><circle cx="30" cy="30" r="26" fill="none" stroke="url(#mg1)" stroke-width="3"/><text x="30" y="39" font-family="Arial" font-size="20" font-weight="900" fill="url(#mg1)" text-anchor="middle">OTP</text></svg>';
+    document.getElementById('iconSvgInput').value = sample;
+    previewHeaderIcon();
+}
+function clearHeaderIcon(){
+    document.getElementById('iconSvgInput').value = '';
+    previewHeaderIcon();
+}
+document.addEventListener('DOMContentLoaded', function(){ previewHeaderIcon(); });
+</script>
+
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+أيقونات الأزرار السفلية
+</h2>
+<div class="custom-help">
+الصق <b>SVG</b> لكل أيقونة. اترك الحقل فاضي للافتراضي.
+</div>
+
+<div style="padding:12px;background:rgba(0,0,0,.3);border-radius:10px;margin-bottom:10px">
+<div style="font-size:12px;color:#00d4ff;font-weight:800;margin-bottom:8px">الرئيسية</div>
+<textarea name="custom_icon_home" rows="3" style="width:100%;padding:8px;font-family:monospace;font-size:11px;direction:ltr;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#e8e8f0;outline:none;resize:vertical" placeholder="&lt;svg...&gt;">{{ s.custom_icon_home or '' }}</textarea>
+</div>
+
+<div style="padding:12px;background:rgba(0,0,0,.3);border-radius:10px;margin-bottom:10px">
+<div style="font-size:12px;color:#00d4ff;font-weight:800;margin-bottom:8px">الدعم</div>
+<textarea name="custom_icon_support" rows="3" style="width:100%;padding:8px;font-family:monospace;font-size:11px;direction:ltr;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#e8e8f0;outline:none;resize:vertical" placeholder="&lt;svg...&gt;">{{ s.custom_icon_support or '' }}</textarea>
+</div>
+
+<div style="padding:12px;background:rgba(0,0,0,.3);border-radius:10px;margin-bottom:10px">
+<div style="font-size:12px;color:#00d4ff;font-weight:800;margin-bottom:8px">الليلي/النهاري</div>
+<textarea name="custom_icon_dark" rows="3" style="width:100%;padding:8px;font-family:monospace;font-size:11px;direction:ltr;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#e8e8f0;outline:none;resize:vertical" placeholder="&lt;svg...&gt;">{{ s.custom_icon_dark or '' }}</textarea>
+</div>
+
+<div style="padding:12px;background:rgba(0,0,0,.3);border-radius:10px;margin-bottom:10px">
+<div style="font-size:12px;color:#00d4ff;font-weight:800;margin-bottom:8px">اللغة</div>
+<textarea name="custom_icon_lang" rows="3" style="width:100%;padding:8px;font-family:monospace;font-size:11px;direction:ltr;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#e8e8f0;outline:none;resize:vertical" placeholder="&lt;svg...&gt;">{{ s.custom_icon_lang or '' }}</textarea>
+</div>
+
+</div>
+
+<div class="custom-section">
+<h2>
+<svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/></svg>
+ألوان إضافية
+</h2>
+
+<div class="custom-row">
+<label>لون البطاقات
+<div class="hint">خلفية البطاقات</div>
+</label>
+<input type="color" name="custom_color_card" value="{{ s.custom_color_card or '#ffffff' }}">
+</div>
+
+<div class="custom-row">
+<label>لون التدرج الثاني
+<div class="hint">اللون الثاني في التدرجات</div>
+</label>
+<input type="color" name="custom_color_gradient2" value="{{ s.custom_color_gradient2 or '#00d4ff' }}">
+</div>
+
+</div>
+
+
+<div class="custom-section" style="background:linear-gradient(160deg,rgba(233,69,96,.08),rgba(233,69,96,.02));border-color:rgba(233,69,96,.35)">
+<h2 style="color:#ff6b8a">
+<svg viewBox="0 0 24 24" style="fill:#ff6b8a"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+إعادة للافتراضي
+</h2>
+<div class="custom-help" style="background:rgba(233,69,96,.08);border-color:rgba(233,69,96,.3);color:#ff8aa3">
+<b style="color:#ff6b8a">تحذير:</b> إعادة تعني مسح التعديلات لهذا القسم فقط.
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+<button type="button" onclick="resetSection('colors')" class="btn btn-orange" style="margin-top:0;font-size:12px;padding:12px">إعادة الألوان</button>
+<button type="button" onclick="resetSection('texts')" class="btn btn-orange" style="margin-top:0;font-size:12px;padding:12px">إعادة النصوص</button>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+<button type="button" onclick="resetSection('icons')" class="btn btn-orange" style="margin-top:0;font-size:12px;padding:12px">إعادة الأيقونات</button>
+<button type="button" onclick="resetSection('all')" class="btn btn-red" style="margin-top:0;font-size:12px;padding:12px">إعادة الكل</button>
+</div>
+</div>
+
+<script>
+async function resetSection(what){
+    var labels = {colors:'الألوان', texts:'النصوص', icons:'الأيقونات', all:'كل التخصيص'};
+    var msg = what === 'all'
+        ? 'إعادة كل التخصيص للافتراضي؟\n\nهذا سيمسح:\n- كل الألوان\n- كل النصوص\n- كل الأيقونات\n\nهل أنت متأكد؟'
+        : 'إعادة ' + labels[what] + ' للافتراضي؟';
+    if(!confirm(msg)) return;
+    try {
+        var r = await fetch('/admin/custom/reset-' + what, {method:'POST', credentials:'same-origin'});
+        var d = await r.json();
+        if(d.ok){
+            location.reload(true);
+        } else {
+            alert('فشل: ' + (d.error || ''));
+        }
+    } catch(e){
+        alert('خطأ: ' + e.message);
+    }
+}
+</script>
+
+<button type="submit" class="btn btn-green">
+<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4z"/></svg>
+حفظ التخصيص
+</button>
+
+</form>
+</div>
 
 <div class="pane" id="pane-settings">
 <form method="POST" action="/admin/save-settings">
@@ -6804,6 +7462,78 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 .iopt,.copt{transition:all .2s}
 label input:checked + .iopt{border-color:#7b2ff7 !important;box-shadow:0 0 20px rgba(123,47,247,.4);background:rgba(123,47,247,.15) !important}
 label input:checked + .copt{border-color:#fff !important;box-shadow:0 0 20px rgba(255,255,255,.3);transform:scale(1.05)}
+
+/* ═══ زر مسح الكاش — مميز ═══ */
+.cache-btn{
+    padding:9px 14px;
+    background:linear-gradient(135deg,#e94560,#c62a47);
+    border:1px solid rgba(233,69,96,.4);
+    color:#fff;
+    border-radius:11px;
+    font-size:12px;
+    font-weight:800;
+    cursor:pointer;
+    font-family:inherit;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    box-shadow:0 4px 14px rgba(233,69,96,.35);
+    transition:all .2s;
+    animation:cachePulse 3s ease-in-out infinite;
+}
+.cache-btn:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(233,69,96,.5)}
+.cache-btn:active{transform:scale(.96)}
+.cache-btn:disabled{opacity:.6;cursor:wait;animation:none}
+.cache-btn svg{width:14px;height:14px;fill:currentColor;flex-shrink:0}
+@keyframes cachePulse{0%,100%{box-shadow:0 4px 14px rgba(233,69,96,.35)}50%{box-shadow:0 4px 22px rgba(233,69,96,.6)}}
+
+/* زر مسح الكاش في المستخدم العادي */
+.cache-btn-user{
+    padding:8px 12px;
+    background:linear-gradient(135deg,#f59e0b,#e67e22);
+    border:1px solid rgba(245,158,11,.4);
+    color:#fff;
+    border-radius:10px;
+    font-size:11px;
+    font-weight:800;
+    cursor:pointer;
+    font-family:inherit;
+    display:flex;
+    align-items:center;
+    gap:5px;
+    transition:all .2s;
+    position:fixed;
+    top:80px;
+    left:16px;
+    z-index:99;
+    box-shadow:0 4px 14px rgba(245,158,11,.35);
+}
+.cache-btn-user:active{transform:scale(.95)}
+.cache-btn-user svg{width:14px;height:14px;fill:currentColor}
+
+<style>
+/* ═══ زر حفظ لكل حقل ═══ */
+.per-field-save{
+    margin-right:8px;
+    padding:8px 12px;
+    border:none;
+    border-radius:10px;
+    background:linear-gradient(135deg,#7b2ff7,#00d4ff);
+    color:#fff;
+    font-size:14px;
+    font-weight:700;
+    cursor:pointer;
+    font-family:inherit;
+    box-shadow:0 4px 12px rgba(123,47,247,.3);
+    transition:all .2s;
+    display:none;
+    flex-shrink:0;
+    line-height:1;
+}
+.per-field-save:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(123,47,247,.5)}
+.per-field-save:active{transform:scale(.95)}
+.per-field-save:disabled{cursor:wait;opacity:.8}
+</style>
 </style>
 </div>
 
@@ -7302,6 +8032,337 @@ document.addEventListener("click", function(e){
 });
 
 </script>
+
+<script>
+async function adminClearCache(){
+    if(!confirm('مسح كاش جميع المستخدمين؟\n\nهذا سيجبر كل المتصفحات على تحديث الموقع فوراً.')) return;
+    var btns = document.querySelectorAll('.cache-btn');
+    btns.forEach(function(b){ b.disabled = true; b.innerHTML = '⏳ جاري المسح...'; });
+    try {
+        var r = await fetch('/admin/cache/clear', {method:'POST'});
+        var d = await r.json();
+        if(d.ok){
+            await _selfClearCache();
+            alert('✅ تم إرسال أمر المسح\nعدد المتصلين: ' + (d.clients || 0) + '\n\nسيتم تحديث متصفحك الآن...');
+            setTimeout(function(){ window.location.reload(true); }, 800);
+        } else {
+            alert('❌ فشل: ' + (d.error || ''));
+            btns.forEach(function(b){ b.disabled = false; b.innerHTML = 'مسح الكاش'; });
+        }
+    } catch(e){
+        alert('❌ خطأ: ' + e.message);
+        btns.forEach(function(b){ b.disabled = false; b.innerHTML = 'مسح الكاش'; });
+    }
+}
+async function _selfClearCache(){
+    try {
+        if('caches' in window){
+            var names = await caches.keys();
+            await Promise.all(names.map(function(n){ return caches.delete(n); }));
+        }
+        if('serviceWorker' in navigator){
+            var regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(function(r){ return r.unregister(); }));
+        }
+        var keep = ['theme','lang'];
+        var saved = {};
+        keep.forEach(function(k){ saved[k] = localStorage.getItem(k); });
+        localStorage.clear();
+        keep.forEach(function(k){ if(saved[k]) localStorage.setItem(k, saved[k]); });
+        sessionStorage.clear();
+    } catch(e){ console.log('clearCache err:', e); }
+}
+</script>
+
+<script>
+// ═══════════════════════════════════════════
+// AUTO-SAVE — حفظ تلقائي لكل حقل
+// ═══════════════════════════════════════════
+(function(){
+    var saveTimers = {};
+    var SAVE_DELAY = 1200; // 1.2 ثانية
+
+    // اسم مختصر لكل حقل
+    var FIELD_NAMES = {
+        "custom_bg_color": "لون الخلفية",
+        "custom_text_color": "لون النص",
+        "custom_header_color": "لون الهيدر",
+        "custom_btn_color": "لون الأزرار",
+        "custom_title_text": "اسم الموقع",
+        "custom_platform_title": "عنوان اختر المنصة",
+        "custom_numbers_title": "عنوان الأرقام",
+        "custom_codes_text": "زر الأكواد",
+        "custom_fetch_text": "زر تحديث OTP",
+        "custom_header_icon_svg": "أيقونة الهيدر",
+        "custom_icon_home": "أيقونة الرئيسية",
+        "custom_icon_support": "أيقونة الدعم",
+        "custom_icon_dark": "أيقونة الليلي",
+        "custom_icon_lang": "أيقونة اللغة",
+        "custom_color_card": "لون البطاقات",
+        "custom_color_gradient2": "لون التدرج"
+    };
+
+    // إشعار
+    function showToastAuto(text, color){
+        var old = document.getElementById('autoSaveToast');
+        if(old) old.remove();
+        var t = document.createElement('div');
+        t.id = 'autoSaveToast';
+        t.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-100px);background:' + (color || 'linear-gradient(135deg,#00b894,#00a884)') + ';color:#fff;padding:10px 20px;border-radius:30px;font-size:13px;font-weight:700;z-index:999999;box-shadow:0 8px 30px rgba(0,0,0,.4);transition:all .4s cubic-bezier(.34,1.56,.64,1);opacity:0;direction:rtl;font-family:inherit;pointer-events:none';
+        t.textContent = text;
+        document.body.appendChild(t);
+        setTimeout(function(){ t.style.transform = 'translateX(-50%) translateY(0)'; t.style.opacity = '1'; }, 50);
+        setTimeout(function(){
+            t.style.transform = 'translateX(-50%) translateY(-100px)';
+            t.style.opacity = '0';
+            setTimeout(function(){ t.remove(); }, 400);
+        }, 2000);
+    }
+
+    // مؤشر جاري الحفظ بجانب الحقل
+    function showSavingIndicator(el, state){
+        var parent = el.closest('.custom-row') || el.parentElement;
+        if(!parent) return;
+        var ind = parent.querySelector('.auto-save-indicator');
+        if(!ind){
+            ind = document.createElement('span');
+            ind.className = 'auto-save-indicator';
+            ind.style.cssText = 'font-size:10px;font-weight:700;margin-right:8px;display:inline-block;transition:all .2s;';
+            if(parent.tagName === 'LABEL'){
+                parent.appendChild(ind);
+            } else {
+                el.insertAdjacentElement('afterend', ind);
+            }
+        }
+        if(state === 'saving'){
+            ind.style.color = '#ffcb6b';
+            ind.textContent = '⏳';
+        } else if(state === 'ok'){
+            ind.style.color = '#00d4a5';
+            ind.textContent = '✓';
+            setTimeout(function(){ ind.textContent = ''; }, 1500);
+        } else if(state === 'err'){
+            ind.style.color = '#ff6b8a';
+            ind.textContent = '✗';
+        }
+    }
+
+    // حفظ حقل
+    function saveField(el){
+        var name = el.name;
+        if(!name) return;
+        var value = el.value || '';
+        if(el.type === 'checkbox') value = el.checked ? 'on' : '';
+        // إشارة "جاري الحفظ"
+        showSavingIndicator(el, 'saving');
+        fetch('/admin/custom/save-field', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({field: name, value: value})
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if(d.ok){
+                showSavingIndicator(el, 'ok');
+                showToastAuto('✅ تم حفظ ' + (FIELD_NAMES[name] || name));
+            } else {
+                showSavingIndicator(el, 'err');
+                showToastAuto('❌ فشل الحفظ: ' + (d.error || ''), 'linear-gradient(135deg,#e94560,#c62a47)');
+            }
+        })
+        .catch(function(e){
+            showSavingIndicator(el, 'err');
+            showToastAuto('❌ خطأ: ' + e.message, 'linear-gradient(135deg,#e94560,#c62a47)');
+        });
+    }
+
+    // اربط الحقول
+    function bindFields(){
+        // كل الحقول في pane-custom
+        var inputs = document.querySelectorAll('#pane-custom input[name^="custom_"], #pane-custom textarea[name^="custom_"], #pane-custom select[name^="custom_"]');
+        inputs.forEach(function(el){
+            if(el.dataset.autosaveBound) return;
+            el.dataset.autosaveBound = '1';
+            var eventType = 'input';
+            if(el.type === 'checkbox') eventType = 'change';
+            if(el.tagName === 'SELECT') eventType = 'change';
+            el.addEventListener(eventType, function(){
+                var name = el.name;
+                if(saveTimers[name]) clearTimeout(saveTimers[name]);
+                saveTimers[name] = setTimeout(function(){
+                    saveField(el);
+                }, SAVE_DELAY);
+            });
+        });
+        console.log('[AUTO-SAVE] bound ' + inputs.length + ' fields');
+    }
+
+    // ═══ إيقاف الحفظ التلقائي — نستخدم زر حفظ لكل حقل ═══
+    function bindFields(){
+        // نجمع الحقول فقط، لكن ما نربط حفظ تلقائي
+        var inputs = document.querySelectorAll('#pane-custom input[name^="custom_"], #pane-custom textarea[name^="custom_"], #pane-custom select[name^="custom_"]');
+        console.log('[PER-FIELD] ' + inputs.length + ' حقل جاهز لزر حفظ منفصل');
+    }
+
+    if(document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', bindFields);
+    } else {
+        bindFields();
+    }
+
+    console.log('✅ PER-FIELD SAVE — كل حقل له زر حفظ');
+})();
+</script>
+
+<script>
+// ═══════════════════════════════════════════
+// PER-FIELD SAVE — زر حفظ لكل حقل
+// ═══════════════════════════════════════════
+(function(){
+    var FIELD_NAMES = {
+        "custom_bg_color": "لون الخلفية",
+        "custom_text_color": "لون النص",
+        "custom_header_color": "لون الهيدر",
+        "custom_btn_color": "لون الأزرار",
+        "custom_title_text": "اسم الموقع",
+        "custom_platform_title": "عنوان اختر المنصة",
+        "custom_numbers_title": "عنوان الأرقام",
+        "custom_codes_text": "زر الأكواد",
+        "custom_fetch_text": "زر تحديث OTP",
+        "custom_header_icon_svg": "أيقونة الهيدر",
+        "custom_icon_home": "أيقونة الرئيسية",
+        "custom_icon_support": "أيقونة الدعم",
+        "custom_icon_dark": "أيقونة الليلي",
+        "custom_icon_lang": "أيقونة اللغة",
+        "custom_color_card": "لون البطاقات",
+        "custom_color_gradient2": "لون التدرج"
+    };
+
+    function showToast(text, isError){
+        var old = document.getElementById('perFieldToast');
+        if(old) old.remove();
+        var t = document.createElement('div');
+        t.id = 'perFieldToast';
+        var bg = isError ? 'linear-gradient(135deg,#e94560,#c62a47)' : 'linear-gradient(135deg,#00b894,#00a884)';
+        t.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-100px);background:' + bg + ';color:#fff;padding:10px 22px;border-radius:30px;font-size:13px;font-weight:700;z-index:999999;box-shadow:0 8px 30px rgba(0,0,0,.4);transition:all .4s cubic-bezier(.34,1.56,.64,1);opacity:0;direction:rtl;font-family:inherit;pointer-events:none;max-width:90vw;text-align:center';
+        t.textContent = text;
+        document.body.appendChild(t);
+        setTimeout(function(){ t.style.transform = 'translateX(-50%) translateY(0)'; t.style.opacity = '1'; }, 50);
+        setTimeout(function(){
+            t.style.transform = 'translateX(-50%) translateY(-100px)';
+            t.style.opacity = '0';
+            setTimeout(function(){ t.remove(); }, 400);
+        }, 2200);
+    }
+
+    function saveField(el, saveBtn){
+        var name = el.name;
+        if(!name) return;
+        var value = el.value || '';
+        if(el.type === 'checkbox') value = el.checked ? 'on' : '';
+        // حالة الزر
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '⏳';
+        saveBtn.style.background = 'linear-gradient(135deg,#f59e0b,#e67e22)';
+        fetch('/admin/custom/save-field', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({field: name, value: value})
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if(d.ok){
+                saveBtn.innerHTML = '✓';
+                saveBtn.style.background = 'linear-gradient(135deg,#00b894,#00a884)';
+                showToast('✅ تم حفظ ' + (FIELD_NAMES[name] || name));
+                setTimeout(function(){
+                    saveBtn.style.display = 'none';
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '💾';
+                    saveBtn.style.background = 'linear-gradient(135deg,#7b2ff7,#00d4ff)';
+                }, 2000);
+            } else {
+                saveBtn.innerHTML = '✗';
+                saveBtn.style.background = 'linear-gradient(135deg,#e94560,#c62a47)';
+                showToast('❌ فشل: ' + (d.error || ''), true);
+                setTimeout(function(){
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '💾';
+                    saveBtn.style.background = 'linear-gradient(135deg,#7b2ff7,#00d4ff)';
+                }, 2000);
+            }
+        })
+        .catch(function(e){
+            saveBtn.innerHTML = '✗';
+            saveBtn.style.background = 'linear-gradient(135deg,#e94560,#c62a47)';
+            showToast('❌ خطأ: ' + e.message, true);
+            setTimeout(function(){
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '💾';
+                saveBtn.style.background = 'linear-gradient(135deg,#7b2ff7,#00d4ff)';
+            }, 2000);
+        });
+    }
+
+    function attachSaveButton(el){
+        if(el.dataset.perFieldAttached) return;
+        el.dataset.perFieldAttached = '1';
+        // أنشئ زر الحفظ
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'per-field-save';
+        btn.innerHTML = '💾';
+        btn.title = 'حفظ هذا الحقل';
+        btn.style.cssText = 'margin-right:8px;padding:8px 12px;border:none;border-radius:10px;background:linear-gradient(135deg,#7b2ff7,#00d4ff);color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:0 4px 12px rgba(123,47,247,.3);transition:all .2s;display:none;flex-shrink:0;line-height:1';
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            saveField(el, btn);
+        });
+        // ضع الزر جنب الحقل
+        // لو الحقل داخل custom-row → ضعه بعد input
+        var parent = el.closest('.custom-row');
+        if(parent){
+            // ضعه بعد آخر input في السطر
+            el.parentNode.insertBefore(btn, el.nextSibling);
+        } else if(el.parentNode){
+            el.parentNode.insertBefore(btn, el.nextSibling);
+        }
+        // اسمع التعديل
+        var evType = 'input';
+        if(el.type === 'checkbox') evType = 'change';
+        if(el.tagName === 'SELECT') evType = 'change';
+        el.addEventListener(evType, function(){
+            // أظهر الزر عند التعديل
+            btn.style.display = 'inline-block';
+        });
+    }
+
+    function bindAllFields(){
+        var inputs = document.querySelectorAll('#pane-custom input[name^="custom_"], #pane-custom textarea[name^="custom_"], #pane-custom select[name^="custom_"]');
+        inputs.forEach(attachSaveButton);
+        console.log('[PER-FIELD] attached to ' + inputs.length + ' fields');
+    }
+
+    // شغّل عند التحميل
+    if(document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', function(){ setTimeout(bindAllFields, 300); });
+    } else {
+        setTimeout(bindAllFields, 300);
+    }
+
+    // شغّل عند فتح تبويب "تخصيص"
+    document.addEventListener('click', function(e){
+        var t = e.target.closest ? e.target.closest('.tb') : null;
+        if(t && (t.textContent.indexOf('تخصيص') > -1)){
+            setTimeout(bindAllFields, 300);
+        }
+    });
+
+    console.log('✅ PER-FIELD SAVE مفعّل');
+})();
+</script>
 </body>
 </html>"""
 
@@ -7354,7 +8415,22 @@ def api_codes_save():
     data = request.get_json()
     if not data or not data.get("phone") or not data.get("code"):
         return jsonify({"error": "missing data"}), 400
-    c = add_code(data["phone"], data["code"])
+    # ═══ ربط ذكي: ابحث عن الرقم في TREE ═══
+    platform = data.get("platform", "")
+    country = data.get("country", "")
+    if not platform:
+        try:
+            p, c = _find_phone_in_tree(data["phone"])
+            if p:
+                platform = p
+                country = c
+        except Exception:
+            pass
+    c = add_code(
+        data["phone"], data["code"],
+        platform=platform, country=country,
+        brand=data.get("brand", ""), source="user"
+    )
     return jsonify({"ok": True, "code": c})
 
 @app.route("/api/codes/list")
@@ -7567,9 +8643,15 @@ self.addEventListener('message', function(event){
         self.skipWaiting();
     }
     if(event.data && event.data.type === 'CLEAR_CACHE'){
-        caches.keys().then(function(names){
-            names.forEach(function(name){ caches.delete(name); });
-        });
+        event.waitUntil(
+            caches.keys().then(function(names){
+                return Promise.all(names.map(function(name){ return caches.delete(name); }));
+            }).then(function(){
+                return self.clients.matchAll().then(function(clients){
+                    clients.forEach(function(c){ c.postMessage({type: 'CACHE_CLEARED'}); });
+                });
+            })
+        );
     }
 });
 
@@ -7876,6 +8958,25 @@ def index():
         icons=json.dumps(PLATFORM_ICONS, ensure_ascii=False),
         settings_json=json.dumps({**s, "is_admin": bool(session.get("admin_logged"))}, ensure_ascii=False),
         background_on=s.get("background_on", True),
+        custom_bg_color=s.get("custom_bg_color", ""),
+        custom_text_color=s.get("custom_text_color", ""),
+        custom_header_color=s.get("custom_header_color", ""),
+        custom_btn_color=s.get("custom_btn_color", ""),
+        custom_title_text=s.get("custom_title_text", ""),
+        custom_platform_title=s.get("custom_platform_title", ""),
+        custom_numbers_title=s.get("custom_numbers_title", ""),
+        custom_codes_text=s.get("custom_codes_text", ""),
+        custom_fetch_text=s.get("custom_fetch_text", ""),
+        custom_sticky_header=s.get("custom_sticky_header", True),
+        custom_header_icon_svg=s.get("custom_header_icon_svg", ""),
+        custom_icon_home=s.get("custom_icon_home", ""),
+        custom_icon_support=s.get("custom_icon_support", ""),
+        custom_icon_dark=s.get("custom_icon_dark", ""),
+        custom_icon_lang=s.get("custom_icon_lang", ""),
+        custom_icon_platform=s.get("custom_icon_platform", ""),
+        custom_color_card=s.get("custom_color_card", ""),
+        custom_color_gradient2=s.get("custom_color_gradient2", ""),
+        custom_sticky_nav=s.get("custom_sticky_nav", True),
         background_name=s.get("background_name", "المطري OTP"),
         background_style=s.get("background_style", "code"),
         background_custom_svg=s.get("background_custom_svg", ""),
@@ -8290,6 +9391,144 @@ def admin_telegram_clear_codes():
     global _telegram_codes
     _telegram_codes = []
     return redirect(url_for("admin_panel"))
+
+
+
+# ═══════════════════════════════════════════
+# EXTERNAL API — Routes
+# ═══════════════════════════════════════════
+@app.route("/admin/external-api/save", methods=["POST"])
+@admin_required
+def admin_external_api_save():
+    s = load_settings()
+    s["external_api_url"] = request.form.get("external_api_url", "").strip()
+    s["external_api_token"] = request.form.get("external_api_token", "").strip()
+    s["external_api_enabled"] = (request.form.get("external_api_enabled") == "on")
+    s["external_api_smart_bind"] = (request.form.get("external_api_smart_bind") == "on")
+    s["external_api_auto_push"] = (request.form.get("external_api_auto_push") == "on")
+    save_settings(s)
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/external-api/test")
+@admin_required
+def admin_external_api_test():
+    """يفحص الاتصال بالـ API"""
+    s = load_settings()
+    url_base = (s.get("external_api_url") or "").strip().rstrip("/")
+    token = (s.get("external_api_token") or "").strip()
+    if not url_base or not token:
+        return jsonify({"ok": False, "error": "URL أو Token ناقص"})
+    import urllib.request as _ur
+    import urllib.error as _ue
+    last_err = ""
+    for path in ["/api/v1/codes", "/api/codes", "/codes"]:
+        try:
+            req = _ur.Request(
+                url_base + path + "?limit=5",
+                headers={"X-API-Token": token, "Accept": "application/json"}
+            )
+            with _ur.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode()
+                data = json.loads(raw)
+            count = 0
+            status = "unknown"
+            if isinstance(data, dict):
+                count = data.get("count", 0)
+                status = data.get("status", "unknown")
+            return jsonify({
+                "ok": True,
+                "path": path,
+                "status": status,
+                "count": count,
+                "sample": str(data)[:300]
+            })
+        except Exception as e:
+            last_err = str(e)[:200]
+            continue
+    return jsonify({"ok": False, "error": last_err})
+
+
+@app.route("/admin/external-api/status")
+@admin_required
+def admin_external_api_status():
+    s = load_settings()
+    return jsonify({
+        "enabled": bool(s.get("external_api_enabled")),
+        "url": s.get("external_api_url", ""),
+        "has_token": bool(s.get("external_api_token")),
+        "last_fetch": _external_api_last_fetch.get("time", 0),
+        "last_count": _external_api_last_fetch.get("count", 0),
+        "last_status": _external_api_last_fetch.get("status", "idle"),
+        "last_error": _external_api_last_fetch.get("error", ""),
+        "codes_in_memory": len(_telegram_codes),
+        "seen_ids": len(_external_api_seen)
+    })
+
+
+@app.route("/admin/external-api/fetch-now")
+@admin_required
+def admin_external_api_fetch_now():
+    """سحب يدوي فوري"""
+    codes = fetch_external_codes()
+    _external_api_last_fetch["time"] = time.time()
+    _external_api_last_fetch["count"] = len(codes)
+    _external_api_last_fetch["status"] = "ok" if codes else "empty"
+    return jsonify({"ok": True, "count": len(codes), "sample": str(codes)[:500]})
+
+
+
+
+# ═══════════════════════════════════════════
+# CACHE — مسح كاش المستخدمين
+# ═══════════════════════════════════════════
+_cache_broadcast_time = {"last": 0, "count": 0}
+
+@app.route("/admin/cache/clear", methods=["POST"])
+@admin_required
+def admin_cache_clear():
+    """يعلم كل المستخدمين بمسح الكاش"""
+    import time as _t
+    _cache_broadcast_time["last"] = _t.time()
+    _cache_broadcast_time["count"] = _cache_broadcast_time.get("count", 0) + 1
+    # اكتب ملف cache-bust للإشارة
+    try:
+        flag_file = os.path.join(_PERSIST_DIR, "cache_bust.txt")
+        with open(flag_file, "w") as f:
+            f.write(str(_cache_broadcast_time["last"]))
+    except Exception as e:
+        print("[CACHE] write flag err:", e)
+    # امسح ملفات القوالب من lru_cache
+    try:
+        _tpl_cached.cache_clear()
+        print("[CACHE] cleared template cache")
+    except Exception:
+        pass
+    print(f"[CACHE] broadcast #{_cache_broadcast_time['count']} at {_cache_broadcast_time['last']}")
+    return jsonify({"ok": True, "clients": 1, "time": _cache_broadcast_time["last"]})
+
+
+@app.route("/api/cache-version")
+def api_cache_version():
+    """يرجع رقم نسخة الكاش — إذا تغير → المتصفح يمسح"""
+    from flask import Response
+    flag_file = os.path.join(_PERSIST_DIR, "cache_bust.txt")
+    v = "0"
+    try:
+        if os.path.exists(flag_file):
+            with open(flag_file, "r") as f:
+                v = f.read().strip() or "0"
+    except Exception:
+        pass
+    # أضف رقم نسخة bot
+    try:
+        v = v + "-" + _get_bot_version()
+    except Exception:
+        pass
+    resp = Response(json.dumps({"v": v}), mimetype="application/json")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
 
 @app.route("/admin/background/save", methods=["POST"])
 @admin_required
@@ -13771,6 +15010,145 @@ def serve_social_file(filename):
     return send_from_directory(os.path.join(UPLOAD_FOLDER, "social"), filename)
 
 
+
+
+# ═══════════════════════════════════════════
+# CUSTOM SAVE — حفظ التخصيص
+# ═══════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════
+# RESET CUSTOM — إعادة كل التخصيص للافتراضي
+# ═══════════════════════════════════════════
+@app.route("/admin/custom/reset-all", methods=["POST"])
+@admin_required
+def admin_custom_reset_all():
+    s = load_settings()
+    keys_to_reset = [
+        "custom_bg_color", "custom_text_color", "custom_header_color", "custom_btn_color",
+        "custom_title_text", "custom_platform_title", "custom_numbers_title",
+        "custom_codes_text", "custom_fetch_text", "custom_header_icon_svg",
+        "custom_icon_home", "custom_icon_support", "custom_icon_dark", "custom_icon_lang",
+        "custom_color_card", "custom_color_gradient2"
+    ]
+    for k in keys_to_reset:
+        s[k] = ""
+    s["custom_sticky_header"] = True
+    s["custom_sticky_nav"] = True
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[CUSTOM] reset ALL to defaults")
+    return jsonify({"ok": True, "message": "تم إعادة كل التخصيص للافتراضي"})
+
+
+@app.route("/admin/custom/reset-colors", methods=["POST"])
+@admin_required
+def admin_custom_reset_colors():
+    s = load_settings()
+    for k in ["custom_bg_color", "custom_text_color", "custom_header_color", "custom_btn_color", "custom_color_card", "custom_color_gradient2"]:
+        s[k] = ""
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[CUSTOM] reset COLORS")
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/custom/reset-texts", methods=["POST"])
+@admin_required
+def admin_custom_reset_texts():
+    s = load_settings()
+    for k in ["custom_title_text", "custom_platform_title", "custom_numbers_title", "custom_codes_text", "custom_fetch_text"]:
+        s[k] = ""
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[CUSTOM] reset TEXTS")
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/custom/reset-icons", methods=["POST"])
+@admin_required
+def admin_custom_reset_icons():
+    s = load_settings()
+    for k in ["custom_header_icon_svg", "custom_icon_home", "custom_icon_support", "custom_icon_dark", "custom_icon_lang", "custom_icon_platform"]:
+        s[k] = ""
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[CUSTOM] reset ICONS")
+    return jsonify({"ok": True})
+
+
+
+
+# ═══════════════════════════════════════════
+# AUTO-SAVE — حفظ حقل واحد
+# ═══════════════════════════════════════════
+@app.route("/admin/custom/save-field", methods=["POST"])
+@admin_required
+def admin_custom_save_field():
+    data = request.get_json(silent=True) or {}
+    field = (data.get("field") or "").strip()
+    value = (data.get("value") or "").strip()
+    allowed_fields = {
+        "custom_bg_color", "custom_text_color", "custom_header_color", "custom_btn_color",
+        "custom_title_text", "custom_platform_title", "custom_numbers_title",
+        "custom_codes_text", "custom_fetch_text", "custom_header_icon_svg",
+        "custom_icon_home", "custom_icon_support", "custom_icon_dark", "custom_icon_lang",
+        "custom_color_card", "custom_color_gradient2"
+    }
+    if field not in allowed_fields:
+        return jsonify({"ok": False, "error": "field not allowed"}), 400
+    s = load_settings()
+    s[field] = value
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[AUTOSAVE] " + field + " = " + value[:60])
+    return jsonify({"ok": True, "field": field, "value": value})
+
+
+@app.route("/admin/custom/reset-field", methods=["POST"])
+@admin_required
+def admin_custom_reset_field():
+    data = request.get_json(silent=True) or {}
+    field = (data.get("field") or "").strip()
+    allowed_fields = {
+        "custom_bg_color", "custom_text_color", "custom_header_color", "custom_btn_color",
+        "custom_title_text", "custom_platform_title", "custom_numbers_title",
+        "custom_codes_text", "custom_fetch_text", "custom_header_icon_svg",
+        "custom_icon_home", "custom_icon_support", "custom_icon_dark", "custom_icon_lang",
+        "custom_color_card", "custom_color_gradient2"
+    }
+    if field not in allowed_fields:
+        return jsonify({"ok": False, "error": "field not allowed"}), 400
+    s = load_settings()
+    s[field] = ""
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[RESET] " + field)
+    return jsonify({"ok": True, "field": field})
+
+
+@app.route("/admin/custom/save", methods=["POST"])
+@admin_required
+def admin_custom_save():
+    s = load_settings()
+    keys = [
+        "custom_bg_color", "custom_text_color", "custom_header_color", "custom_btn_color",
+        "custom_title_text", "custom_platform_title", "custom_numbers_title",
+        "custom_codes_text", "custom_fetch_text", "custom_header_icon_svg",
+        "custom_icon_home", "custom_icon_support", "custom_icon_dark", "custom_icon_lang",
+        "custom_color_card", "custom_color_gradient2"
+    ]
+    for k in keys:
+        if k in request.form:
+            s[k] = request.form[k].strip()
+    s["custom_sticky_header"] = (request.form.get("custom_sticky_header") == "on")
+    s["custom_sticky_nav"] = (request.form.get("custom_sticky_nav") == "on")
+    s["version"] = str(int(time.time()))
+    save_settings(s)
+    print("[CUSTOM] saved colors and texts")
+    return redirect(url_for("admin_panel"))
+
+
 if __name__ == "__main__":
     # ═══ رسالة التشغيل المميزة (ملونة) ═══
     # ألوان ANSI
@@ -13831,6 +15209,7 @@ if __name__ == "__main__":
     _ensure_platform_icon_pngs()
     print('✅ قاعدة البيانات جاهزة')
     start_telegram_bot()
+    start_external_api_poller()
 
     # ═══ كشف البيئة ═══
     import os as _os_env
