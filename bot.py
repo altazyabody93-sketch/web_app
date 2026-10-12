@@ -4557,6 +4557,12 @@ function contactSupport(){
 
 document.addEventListener('DOMContentLoaded', function(){
     applyTheme();
+    // ═══ اعرض المنصات مباشرة عند فتح الموقع ═══
+    try {
+        if(typeof renderPlatforms === 'function'){
+            renderPlatforms();
+        }
+    } catch(e){ console.log('renderPlatforms err:', e); }
     // تطبيق اللغة عند البدء
     if(currentLang === 'en'){
         document.documentElement.lang = 'en';
@@ -13853,3 +13859,4 @@ if __name__ == "__main__":
         use_reloader=False,
         processes=1
     )
+# Deploy trigger 1791752204
