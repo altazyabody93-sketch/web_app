@@ -425,6 +425,128 @@ def _db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def apis_list(only_enabled=False):
+    """يرجع قائمة كل اللوحات"""
+    try:
+        conn = _db()
+        if only_enabled:
+            rows = conn.execute("SELECT * FROM external_apis WHERE enabled=1 ORDER BY id ASC").fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM external_apis ORDER BY id ASC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print("apis_list err:", e)
+        return []
+
+def apis_get(aid):
+    """يرجع لوحة واحدة"""
+    try:
+        conn = _db()
+        row = conn.execute("SELECT * FROM external_apis WHERE id=?", (aid,)).fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        print("apis_get err:", e)
+        return None
+
+def apis_add(name, url, token="", username="", password="", auth_type="token",
+             enabled=1, smart_bind=1, auto_push=1, interval_sec=60):
+    """يضيف لوحة جديدة"""
+    try:
+        conn = _db()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO external_apis
+            (name, url, token, username, password, auth_type, enabled,
+             smart_bind, auto_push, interval_sec, last_status, created, updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+        """, (name.strip(), url.strip().rstrip('/'), token.strip(),
+              username.strip(), password, auth_type.strip(),
+              int(enabled), int(smart_bind), int(auto_push),
+              int(interval_sec), time.time(), time.time()))
+        aid = c.lastrowid
+        conn.commit()
+        conn.close()
+        print(f"[APIS] add #{aid}: {name} -> {url}")
+        return aid
+    except Exception as e:
+        print("apis_add err:", e)
+        return None
+
+def apis_update(aid, **fields):
+    """يحدّث حقول لوحة"""
+    allowed = {"name","url","token","username","password","auth_type",
+               "enabled","smart_bind","auto_push","interval_sec",
+               "last_fetch","last_count","last_status","last_error"}
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(k + "=?")
+            vals.append(v)
+    if not sets:
+        return False
+    sets.append("updated=?")
+    vals.append(time.time())
+    vals.append(aid)
+    try:
+        conn = _db()
+        conn.execute("UPDATE external_apis SET " + ", ".join(sets) + " WHERE id=?", vals)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print("apis_update err:", e)
+        return False
+
+def apis_delete(aid):
+    """يحذف لوحة"""
+    try:
+        conn = _db()
+        conn.execute("DELETE FROM external_apis WHERE id=?", (aid,))
+        conn.commit()
+        conn.close()
+        print(f"[APIS] deleted #{aid}")
+        return True
+    except Exception as e:
+        print("apis_delete err:", e)
+        return False
+
+def apis_toggle(aid):
+    """يشغّل/يوقف لوحة"""
+    a = apis_get(aid)
+    if not a:
+        return False
+    return apis_update(aid, enabled=0 if a.get("enabled") else 1)
+
+def apis_import_legacy():
+    """ينقل اللوحة القديمة (من settings) إلى الجدول إن لم تكن موجودة"""
+    try:
+        existing = apis_list()
+        if existing:
+            return 0
+        s = load_settings()
+        url = (s.get("external_api_url") or "").strip().rstrip('/')
+        token = (s.get("external_api_token") or "").strip()
+        if not url:
+            return 0
+        apis_add(
+            name="اللوحة الأصلية",
+            url=url,
+            token=token,
+            auth_type="token",
+            enabled=1 if s.get("external_api_enabled") else 0,
+            smart_bind=1 if s.get("external_api_smart_bind", True) else 0,
+            auto_push=1 if s.get("external_api_auto_push", True) else 0,
+            interval_sec=60
+        )
+        print("[APIS] تم استيراد اللوحة القديمة")
+        return 1
+    except Exception as e:
+        print("apis_import_legacy err:", e)
+        return 0
+
 def db_init():
     """إنشاء الجداول لو مو موجودة"""
     conn = _db()
@@ -563,6 +685,30 @@ def db_init():
     except sqlite3.OperationalError:
         pass
     c.execute("CREATE INDEX IF NOT EXISTS idx_sr_post ON social_reactions(post_id)")
+
+    # جدول اللوحات الخارجية المتعددة
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS external_apis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            token TEXT DEFAULT '',
+            username TEXT DEFAULT '',
+            password TEXT DEFAULT '',
+            auth_type TEXT DEFAULT 'token',
+            enabled INTEGER DEFAULT 1,
+            smart_bind INTEGER DEFAULT 1,
+            auto_push INTEGER DEFAULT 1,
+            interval_sec INTEGER DEFAULT 60,
+            last_fetch REAL DEFAULT 0,
+            last_count INTEGER DEFAULT 0,
+            last_status TEXT DEFAULT 'idle',
+            last_error TEXT DEFAULT '',
+            created REAL DEFAULT 0,
+            updated REAL DEFAULT 0
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_apis_enabled ON external_apis(enabled)")
 
     conn.commit()
     conn.close()
@@ -2039,124 +2185,337 @@ def smart_bind_code(item):
 
 
 
+def _api_build_headers(api):
+    """يبني headers حسب نوع المصادقة"""
+    h = {"Accept": "application/json"}
+    auth = (api.get("auth_type") or "token").lower()
+    token = (api.get("token") or "").strip()
+    username = (api.get("username") or "").strip()
+    password = (api.get("password") or "")
+
+    if auth == "token" and token:
+        h["X-API-Token"] = token
+        h["Authorization"] = "Bearer " + token
+    elif auth == "basic" and username:
+        import base64 as _b64
+        creds = (username + ":" + password).encode("utf-8")
+        h["Authorization"] = "Basic " + _b64.b64encode(creds).decode()
+    elif auth == "both":
+        if token:
+            h["X-API-Token"] = token
+        if username:
+            import base64 as _b64
+            creds = (username + ":" + password).encode("utf-8")
+            h["Authorization"] = "Basic " + _b64.b64encode(creds).decode()
+    return h
+
+
+def _api_fetch_account(api):
+    """يجلب معلومات الحساب من /api/v1/me"""
+    import urllib.request as _ur
+    base = (api.get("url") or "").strip().rstrip('/')
+    if not base:
+        return None
+    headers = _api_build_headers(api)
+    try:
+        req = _ur.Request(base + "/api/v1/me", headers=headers)
+        with _ur.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], dict):
+                return data["data"]
+            if "balance" in data or "username" in data:
+                return data
+        return None
+    except Exception as e:
+        print("[API-ACCOUNT] err:", e)
+        return None
+
+
+def _api_fetch_balance(api):
+    """يجلب الرصيد من /api/v1/balance"""
+    import urllib.request as _ur
+    base = (api.get("url") or "").strip().rstrip('/')
+    if not base:
+        return None
+    headers = _api_build_headers(api)
+    try:
+        req = _ur.Request(base + "/api/v1/balance", headers=headers)
+        with _ur.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        if isinstance(data, dict):
+            if "balance" in data:
+                return data.get("balance")
+            if "data" in data and isinstance(data["data"], dict):
+                return data["data"].get("balance")
+        return None
+    except Exception:
+        return None
+
+
+def _api_fetch_one(api, limit=50):
+    """يجلب أكواد من لوحة واحدة — يرجع (ok, codes, error)"""
+    import urllib.request as _ur
+    import urllib.error as _ue
+
+    base = (api.get("url") or "").strip().rstrip('/')
+    if not base:
+        return False, [], "URL فاضي"
+
+    headers = _api_build_headers(api)
+
+    # نجرّب عدة مسارات
+    paths = ["/api/v1/codes", "/api/codes", "/codes"]
+    last_err = ""
+
+    for path in paths:
+        try:
+            req = _ur.Request(
+                base + path + "?limit=" + str(limit),
+                headers=headers
+            )
+            with _ur.urlopen(req, timeout=15) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+
+            codes = []
+            if isinstance(data, list):
+                codes = data
+            elif isinstance(data, dict):
+                codes = data.get("codes") or data.get("data") or data.get("messages") or []
+            return True, codes or [], ""
+        except _ue.HTTPError as e:
+            last_err = "HTTP " + str(e.code)
+            continue
+        except Exception as e:
+            last_err = type(e).__name__ + ": " + str(e)[:120]
+            continue
+
+    return False, [], last_err
+
+
+def api_test(aid):
+    """فحص شامل: أكواد + معلومات حساب + رصيد"""
+    api = apis_get(aid)
+    if not api:
+        return {"ok": False, "error": "اللوحة غير موجودة"}
+
+    result = {
+        "ok": False,
+        "name": api.get("name", ""),
+        "url": api.get("url", ""),
+        "auth_type": api.get("auth_type", "token"),
+        "count": 0,
+        "account": None,
+        "balance": None,
+        "error": ""
+    }
+
+    # 1) جرب الأكواد
+    ok, codes, err = _api_fetch_one(api, limit=5)
+    if ok:
+        result["ok"] = True
+        result["count"] = len(codes) if codes else 0
+        result["sample"] = str(codes[:2])[:300] if codes else ""
+    else:
+        result["error"] = err or "فشل الاتصال"
+
+    # 2) جرب /api/v1/me (معلومات الحساب)
+    try:
+        account = _api_fetch_account(api)
+        if account:
+            result["account"] = {
+                "username": account.get("username", ""),
+                "name": account.get("name", ""),
+                "balance": account.get("balance", 0),
+                "is_active": account.get("is_active", False),
+                "role": account.get("role", ""),
+                "total_codes": account.get("total_codes", 0),
+                "created_at": account.get("created_at", "")
+            }
+            result["balance"] = account.get("balance", 0)
+            # لو الأكواد فشلت لكن الحساب نجح — اعتبره نجاح
+            if not result["ok"]:
+                result["ok"] = True
+                result["error"] = ""
+    except Exception as e:
+        print("[TEST-ACCOUNT] err:", e)
+
+    # 3) حدّث DB
+    if result["ok"]:
+        apis_update(aid,
+                    last_fetch=time.time(),
+                    last_count=result["count"],
+                    last_status="ok",
+                    last_error="")
+    else:
+        apis_update(aid,
+                    last_fetch=time.time(),
+                    last_status="error",
+                    last_error=result["error"][:200])
+
+    return result
+
+
+def apis_test_all():
+    """يفحص كل اللوحات — يرجع قائمة نتائج"""
+    results = []
+    for a in apis_list():
+        r = api_test(a["id"])
+        r["id"] = a["id"]
+        results.append(r)
+    return results
+
+
+def _process_codes_from_api(api, codes):
+    """يعالج أكواد لوحة واحدة: يخزن + Push"""
+    if not codes:
+        return 0
+
+    smart = bool(api.get("smart_bind", 1))
+    auto_push = bool(api.get("auto_push", 1))
+    api_name = api.get("name", "")
+    new_count = 0
+
+    for item in codes:
+        if not isinstance(item, dict):
+            continue
+
+        # مفتاح فريد
+        cid = str(item.get("id") or item.get("otp_code") or item.get("code") or
+                  json.dumps({k: item.get(k) for k in ("phone_number","otp_code") if k in item}, sort_keys=True))
+        cid = "api" + str(api.get("id", 0)) + "_" + cid
+
+        if cid in _external_api_seen:
+            continue
+        _external_api_seen.add(cid)
+        new_count += 1
+
+        # الربط الذكي
+        if smart:
+            bind = smart_bind_code(item)
+        else:
+            bind = {
+                "phone": str(item.get("phone_number") or item.get("phone") or ""),
+                "code": str(item.get("otp_code") or item.get("code") or ""),
+                "brand": str(item.get("app_name") or ""),
+                "platform": "غير مصنّف",
+                "country": "",
+                "message": str(item.get("message_text") or ""),
+                "source": "external_api",
+                "bound_by": "none"
+            }
+
+        if not bind["phone"] or not bind["code"]:
+            continue
+
+        # خزنه في codes.json
+        try:
+            codes_list = load_codes()
+            now = time.time()
+            exists = False
+            for c in codes_list:
+                if (c.get("phone") == bind["phone"]
+                    and c.get("code") == bind["code"]
+                    and (now - c.get("timestamp", 0)) < 300):
+                    exists = True
+                    break
+            if not exists:
+                new_code = {
+                    "id": "C" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10)),
+                    "phone": bind["phone"],
+                    "code": bind["code"],
+                    "platform": bind["platform"],
+                    "country": bind["country"],
+                    "brand": bind["brand"],
+                    "source": "api:" + api_name,
+                    "bound_by": bind["bound_by"],
+                    "message": bind["message"][:200],
+                    "timestamp": now
+                }
+                codes_list.append(new_code)
+                if len(codes_list) > 500:
+                    codes_list = codes_list[-500:]
+                save_codes(codes_list)
+                print(f"[API-{api_name}] {bind['platform']} | {bind['phone'][-5:]} | {bind['code']} | via={bind['bound_by']}")
+        except Exception as _e:
+            print("[API] save err:", _e)
+
+        # Push
+        if auto_push:
+            try:
+                send_push_to_all(
+                    title="كود جديد — " + (bind["platform"] or api_name),
+                    body="الرقم: " + bind["phone"][-5:] + "\nالكود: " + bind["code"],
+                    url="/"
+                )
+            except Exception:
+                pass
+
+    return new_count
+
+
 def external_api_poll():
-    """يسحب من API الخارجي — مع الربط الذكي"""
-    global _external_api_seen
-    print("[EXT-API] smart poller started")
+    """Poller متعدد — يقرأ كل اللوحات المفعّلة من DB"""
+    print("[EXT-API] multi-poller started")
+    # استورد اللوحة القديمة مرة واحدة
+    try:
+        apis_import_legacy()
+    except Exception as e:
+        print("[EXT-API] import legacy err:", e)
+
     while True:
         try:
-            s = load_settings()
-            if not s.get("external_api_enabled"):
-                time.sleep(10)
-                continue
-            smart = bool(s.get("external_api_smart_bind", True))
-            auto_push = bool(s.get("external_api_auto_push", True))
-            codes = fetch_external_codes()
-            _external_api_last_fetch["time"] = time.time()
-            _external_api_last_fetch["count"] = len(codes)
-            if codes:
-                _external_api_last_fetch["status"] = "ok"
-                _external_api_last_fetch["error"] = ""
-                new = 0
-                for item in codes:
-                    if not isinstance(item, dict):
-                        continue
-                    cid = str(item.get("id") or item.get("otp_code") or item.get("code") or
-                              json.dumps({k: item.get(k) for k in ("phone_number","otp_code") if k in item}, sort_keys=True))
-                    if cid in _external_api_seen:
-                        continue
-                    _external_api_seen.add(cid)
-                    new += 1
+            apis = apis_list(only_enabled=True)
+            now = time.time()
+            total_new = 0
+            total_fetched = 0
 
-                    # ═══ الربط الذكي ═══
-                    if smart:
-                        bind = smart_bind_code(item)
-                    else:
-                        bind = {
-                            "phone": str(item.get("phone_number") or item.get("phone") or ""),
-                            "code": str(item.get("otp_code") or item.get("code") or ""),
-                            "brand": str(item.get("app_name") or ""),
-                            "platform": "غير مصنّف",
-                            "country": "",
-                            "message": str(item.get("message_text") or ""),
-                            "source": "external_api",
-                            "bound_by": "none"
-                        }
+            for api in apis:
+                # احترم interval كل لوحة
+                last = api.get("last_fetch") or 0
+                interval = int(api.get("interval_sec") or 60)
+                if last and (now - last) < interval:
+                    continue
 
-                    if not bind["phone"] or not bind["code"]:
-                        continue
+                aid = api["id"]
+                ok, codes, err = _api_fetch_one(api, limit=50)
+                _external_api_last_fetch["time"] = now
 
-                    # ═══ خزنه في codes.json ═══
-                    try:
-                        codes_list = load_codes()
-                        now = time.time()
-                        # منع التكرار
-                        exists = False
-                        for c in codes_list:
-                            if (c.get("phone") == bind["phone"]
-                                and c.get("code") == bind["code"]
-                                and (now - c.get("timestamp", 0)) < 300):
-                                exists = True
-                                break
-                        if not exists:
-                            new_code = {
-                                "id": "C" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10)),
-                                "phone": bind["phone"],
-                                "code": bind["code"],
-                                "platform": bind["platform"],
-                                "country": bind["country"],
-                                "brand": bind["brand"],
-                                "source": bind["source"],
-                                "bound_by": bind["bound_by"],
-                                "message": bind["message"][:200],
-                                "timestamp": now
-                            }
-                            codes_list.append(new_code)
-                            if len(codes_list) > 500:
-                                codes_list = codes_list[-500:]
-                            save_codes(codes_list)
-                            print(f"[SMART-BIND] ✅ {bind['platform']} | {bind['country']} | {bind['phone'][-5:]} | {bind['code']} | via={bind['bound_by']}")
-                    except Exception as _e:
-                        print("[SMART-BIND] save err:", _e)
+                if not ok:
+                    apis_update(aid,
+                                last_fetch=now,
+                                last_status="error",
+                                last_error=(err or "")[:200])
+                    print(f"[API-{api.get('name')}] FAIL: {err}")
+                    continue
 
-                    # ═══ خزنه في الذاكرة (للتوافق القديم) ═══
-                    try:
-                        _telegram_codes.append({
-                            "phone_last": bind["phone"][-5:] if len(bind["phone"]) >= 5 else bind["phone"],
-                            "code": bind["code"],
-                            "brand": bind["brand"],
-                            "flag": "",
-                            "platform": bind["platform"],
-                            "country": bind["country"],
-                            "full_msg": bind["message"],
-                            "timestamp": time.time()
-                        })
-                        if len(_telegram_codes) > 500:
-                            _telegram_codes.pop(0)
-                    except Exception:
-                        pass
+                fetched = len(codes) if codes else 0
+                total_fetched += fetched
 
-                    # ═══ Push ذكي ═══
-                    if auto_push:
-                        try:
-                            send_push_to_all(
-                                title="كود جديد — " + (bind["platform"] or "API"),
-                                body="الرقم: " + bind["phone"][-5:] + "\nالكود: " + bind["code"],
-                                url="/"
-                            )
-                        except Exception:
-                            pass
+                # عالج الأكواد
+                new_cnt = _process_codes_from_api(api, codes)
+                total_new += new_cnt
 
-                if new:
-                    print(f"[EXT-API] +{new} كود جديد (إجمالي: {len(codes)})")
-            else:
-                _external_api_last_fetch["status"] = "empty"
+                apis_update(aid,
+                            last_fetch=now,
+                            last_count=fetched,
+                            last_status="ok" if fetched else "empty",
+                            last_error="")
+
+                if new_cnt:
+                    print(f"[API-{api.get('name')}] +{new_cnt} كود جديد")
+
+            _external_api_last_fetch["count"] = total_fetched
+            _external_api_last_fetch["status"] = "ok" if total_fetched else "empty"
+            _external_api_last_fetch["error"] = ""
+
         except Exception as e:
             _external_api_last_fetch["status"] = "error"
             _external_api_last_fetch["error"] = str(e)[:200]
-            print("[EXT-API] err:", e)
-        time.sleep(10)
+            print("[EXT-API] poller err:", e)
 
+        time.sleep(10)
 
 def start_external_api_poller():
     """يبدأ poller في thread"""
@@ -6638,6 +6997,10 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 </div>
 
 <div class="links">
+<a href="/admin/apis" class="lnk" style="background:linear-gradient(135deg,#00b894,#00a884);border-color:transparent;color:#fff">
+<svg viewBox="0 0 24 24" width="20" height="20" style="fill:#fff;flex-shrink:0"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15l3.5-4.5 2.5 3.01L14.5 9l4.5 6H5z"/></svg>
+<span>اللوحات</span>
+</a>
 <a href="/" class="lnk">
 <svg viewBox="0 0 24 24" width="20" height="20" style="fill:#00d4ff;flex-shrink:0"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
 <span>الموقع</span>
@@ -9397,6 +9760,411 @@ def admin_telegram_clear_codes():
 # ═══════════════════════════════════════════
 # EXTERNAL API — Routes
 # ═══════════════════════════════════════════
+# ═══════════════════════════════════════════
+# MULTI APIS — إدارة اللوحات المتعددة
+# ═══════════════════════════════════════════
+APIS_ADMIN_HTML = r"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>اللوحات</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:sans-serif}
+body{background:#07070d;color:#e8e8f0;padding:0 0 40px;direction:rtl}
+.hdr{background:linear-gradient(135deg,#0c0c18,#12122a);border-bottom:1px solid rgba(123,47,247,.25);padding:16px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0}
+.hdr .back{padding:10px 14px;background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.3);color:#00d4ff;border-radius:12px;font-size:12px;font-weight:700;text-decoration:none}
+.hdr h1{font-size:19px;font-weight:900;background:linear-gradient(135deg,#7b2ff7,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;flex:1}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 18px}
+.stat{background:#10101e;border:1px solid rgba(123,47,247,.2);border-radius:14px;padding:12px 8px;text-align:center}
+.stat b{font-size:20px;font-weight:900;display:block;color:#00d4ff}
+.stat.green b{color:#00d4a5}
+.stat.red b{color:#ff6b8a}
+.stat.gray b{color:#8e8eab}
+.stat span{font-size:10px;color:#6e6e8a}
+.wrap{padding:0 18px}
+label{display:block;font-size:12px;color:#8e8eab;margin:10px 0 6px;font-weight:600}
+input,select{width:100%;padding:11px 13px;border:1px solid rgba(255,255,255,.1);border-radius:11px;background:rgba(0,0,0,.4);color:#e8e8f0;font-size:13px;outline:none}
+input:focus,select:focus{border-color:#7b2ff7}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{width:100%;padding:13px;border:none;border-radius:12px;color:#fff;cursor:pointer;font-weight:800;font-size:14px;margin-top:12px;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn-grad{background:linear-gradient(135deg,#7b2ff7,#00d4ff)}
+.btn-orange{background:linear-gradient(135deg,#f59e0b,#e67e22)}
+.btn-green{background:linear-gradient(135deg,#00b894,#00a884)}
+.card{background:#10101e;border:1px solid rgba(123,47,247,.18);border-radius:18px;padding:16px;margin-bottom:12px}
+.card.off{opacity:.55}
+.card.err{border-color:rgba(233,69,96,.4)}
+.card.ok{border-color:rgba(0,212,165,.4)}
+.c-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.c-ico{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,#7b2ff7,#00d4ff);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.c-ico svg{width:24px;height:24px;fill:#fff}
+.c-info{flex:1;min-width:0}
+.c-name{font-size:15px;font-weight:800;color:#fff;margin-bottom:4px}
+.c-url{font-size:11px;color:#00d4ff;font-family:monospace;direction:ltr;text-align:left;word-break:break-all;margin-bottom:6px}
+.c-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:10px}
+.tag{padding:3px 9px;border-radius:8px;font-weight:700;background:rgba(0,212,255,.12);color:#00d4ff}
+.tag.ok{background:rgba(0,212,165,.15);color:#00d4a5}
+.tag.err{background:rgba(255,107,138,.15);color:#ff6b8a}
+.tag.off{background:rgba(142,142,171,.15);color:#8e8eab}
+.tag.gold{background:rgba(251,191,36,.15);color:#fbbf24}
+.tag.purple{background:rgba(123,47,247,.15);color:#c8a2ff}
+.actions{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:12px}
+.act{padding:10px 4px;border:none;border-radius:10px;cursor:pointer;font-size:11px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:4px;text-decoration:none;color:#fff}
+.act svg{width:16px;height:16px;fill:currentColor}
+.act.test{background:rgba(0,212,255,.15);color:#00d4ff}
+.act.edit{background:rgba(123,47,247,.15);color:#c8a2ff}
+.act.toggle-on{background:rgba(0,212,165,.15);color:#00d4a5}
+.act.toggle-off{background:rgba(251,191,36,.15);color:#fbbf24}
+.act.del{background:rgba(233,69,96,.15);color:#ff6b8a}
+.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:9999;align-items:center;justify-content:center;padding:16px}
+.modal.show{display:flex}
+.modal-box{background:#10101e;border:1px solid rgba(123,47,247,.3);border-radius:18px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow-y:auto}
+.modal-box h3{color:#00d4ff;margin-bottom:14px;font-size:15px;font-weight:800}
+.empty{text-align:center;padding:50px 20px;color:#6e6e8a}
+.empty svg{width:64px;height:64px;fill:#2a2a35;margin-bottom:14px;display:block;margin-left:auto;margin-right:auto}
+.top-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}
+.check-row{display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.3);border-radius:10px;margin-top:8px;cursor:pointer}
+.check-row input{width:auto;margin:0;transform:scale(1.3)}
+.check-row span{font-size:12px;color:#c8c8d8;font-weight:600}
+.test-result{margin-top:10px;padding:10px;border-radius:10px;font-size:12px;font-family:monospace;direction:ltr;text-align:left;white-space:pre-wrap;display:none}
+.test-result.show{display:block}
+.test-result.ok{background:rgba(0,212,165,.1);border:1px solid rgba(0,212,165,.3);color:#6fe3c1}
+.account-box{margin-top:10px;padding:12px;background:linear-gradient(135deg,rgba(123,47,247,.08),rgba(0,212,255,.06));border:1px solid rgba(123,47,247,.3);border-radius:12px}
+.account-box.show{display:block !important}
+.account-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}
+.account-row:last-child{border:none}
+.account-row .lbl{color:#8e8eab;font-weight:600}
+.account-row .val{color:#fff;font-weight:700;font-family:monospace;direction:ltr}
+.account-row .val.green{color:#00d4a5}
+.account-row .val.gold{color:#fbbf24}
+.account-row .val.red{color:#ff6b8a}
+.test-result.err{background:rgba(233,69,96,.1);border:1px solid rgba(233,69,96,.3);color:#ff8aa3}
+</style>
+</head>
+<body>
+<div class="hdr">
+<a href="/admin" class="back">الأدمن</a>
+<h1>اللوحات الخارجية</h1>
+</div>
+<div class="stats">
+<div class="stat"><b>{{ total }}</b><span>الكل</span></div>
+<div class="stat green"><b>{{ enabled_count }}</b><span>مفعّلة</span></div>
+<div class="stat gray"><b>{{ disabled_count }}</b><span>موقوفة</span></div>
+<div class="stat red"><b>{{ err_count }}</b><span>أخطاء</span></div>
+</div>
+<div class="wrap">
+<div class="top-actions">
+<button class="btn btn-grad" onclick="showAddModal()" style="margin-top:0">إضافة لوحة جديدة</button>
+<button class="btn btn-orange" onclick="testAll()" style="margin-top:0">فحص الكل</button>
+</div>
+<button class="btn btn-green" onclick="fetchAll()" style="margin-top:0;margin-bottom:18px">سحب فوري من كل اللوحات</button>
+<div id="fetchResult" class="test-result" style="margin-bottom:18px"></div>
+{% if apis %}
+{% for a in apis %}
+<div class="card {% if not a.enabled %}off{% endif %} {% if a.last_status == 'error' %}err{% elif a.last_status == 'ok' %}ok{% endif %}">
+<div class="c-head">
+<div class="c-ico"><svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z"/></svg></div>
+<div class="c-info">
+<div class="c-name">{{ a.name }}</div>
+<div class="c-url">{{ a.url }}</div>
+<div class="c-meta">
+{% if a.enabled %}<span class="tag ok">مفعّلة</span>{% else %}<span class="tag off">موقوفة</span>{% endif %}
+<span class="tag">{{ a.auth_type }}</span>
+{% if a.smart_bind %}<span class="tag purple">Smart</span>{% endif %}
+{% if a.auto_push %}<span class="tag gold">Push</span>{% endif %}
+<span class="tag">كل {{ a.interval_sec }}ث</span>
+{% if a.last_status == 'ok' %}<span class="tag ok">{{ a.last_count }} كود</span>{% endif %}
+{% if a.last_status == 'error' %}<span class="tag err">خطأ</span>{% endif %}
+</div>
+<div id="account-{{ a.id }}" class="account-box" style="display:none"></div>
+</div>
+</div>
+<div class="actions">
+<a href="#" class="act test" onclick="return testOne(event, {{ a.id }})">فحص</a>
+<button class="act edit" onclick='showEditModal({{ a.id }}, {{ a.name|tojson }}, {{ a.url|tojson }}, {{ a.token|tojson }}, {{ a.username|tojson }}, {{ a.password|tojson }}, {{ a.auth_type|tojson }}, {{ a.enabled }}, {{ a.smart_bind }}, {{ a.auto_push }}, {{ a.interval_sec }})'>تعديل</button>
+<a href="/admin/apis/toggle/{{ a.id }}" class="act {% if a.enabled %}toggle-on{% else %}toggle-off{% endif %}">{% if a.enabled %}إيقاف{% else %}تشغيل{% endif %}</a>
+<a href="/admin/apis/delete/{{ a.id }}" class="act del" onclick="return confirm('حذف؟')">حذف</a>
+</div>
+<div id="test-res-{{ a.id }}" class="test-result"></div>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty"><svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg><div style="font-size:15px;font-weight:800;color:#4a4a5e">لا توجد لوحات</div></div>
+{% endif %}
+</div>
+<div class="modal" id="apiModal">
+<div class="modal-box">
+<h3 id="modalTitle">إضافة لوحة</h3>
+<form method="POST" id="apiForm" action="/admin/apis/add">
+<label>اسم اللوحة</label>
+<input type="text" name="name" id="fName" required maxlength="60">
+<label>الرابط</label>
+<input type="text" name="url" id="fUrl" required dir="ltr" style="font-family:monospace">
+<label>نوع المصادقة</label>
+<select name="auth_type" id="fAuth" onchange="authChanged()">
+<option value="token">Token فقط</option>
+<option value="basic">User + Pass</option>
+<option value="both">Token + User/Pass</option>
+<option value="none">بدون</option>
+</select>
+<div id="tokenBlock">
+<label>Token</label>
+<input type="text" name="token" id="fToken" dir="ltr" style="font-family:monospace">
+</div>
+<div id="basicBlock" style="display:none">
+<div class="grid2">
+<div><label>Username</label><input type="text" name="username" id="fUser" dir="ltr"></div>
+<div><label>Password</label><input type="text" name="password" id="fPass" dir="ltr"></div>
+</div>
+</div>
+<label>فترة السحب (ثواني)</label>
+<input type="number" name="interval_sec" id="fInterval" value="60" min="10" max="3600">
+<label class="check-row"><input type="checkbox" name="enabled" id="fEnabled" checked><span>مفعّلة</span></label>
+<label class="check-row"><input type="checkbox" name="smart_bind" id="fSmart" checked><span>Smart Bind</span></label>
+<label class="check-row"><input type="checkbox" name="auto_push" id="fPush" checked><span>Auto Push</span></label>
+<div class="grid2" style="margin-top:14px">
+<button type="submit" class="btn btn-grad" style="margin-top:0">حفظ</button>
+<button type="button" class="btn" style="margin-top:0;background:rgba(255,107,138,.15);color:#ff6b8a" onclick="closeModal()">إلغاء</button>
+</div>
+</form>
+</div>
+</div>
+<script>
+function authChanged(){
+    var v = document.getElementById('fAuth').value;
+    document.getElementById('tokenBlock').style.display = (v === 'token' || v === 'both') ? 'block' : 'none';
+    document.getElementById('basicBlock').style.display = (v === 'basic' || v === 'both') ? 'block' : 'none';
+}
+function showAddModal(){
+    document.getElementById('modalTitle').textContent = 'إضافة لوحة';
+    document.getElementById('apiForm').action = '/admin/apis/add';
+    document.getElementById('fName').value = '';
+    document.getElementById('fUrl').value = '';
+    document.getElementById('fToken').value = '';
+    document.getElementById('fUser').value = '';
+    document.getElementById('fPass').value = '';
+    document.getElementById('fAuth').value = 'token';
+    document.getElementById('fInterval').value = '60';
+    document.getElementById('fEnabled').checked = true;
+    document.getElementById('fSmart').checked = true;
+    document.getElementById('fPush').checked = true;
+    authChanged();
+    document.getElementById('apiModal').classList.add('show');
+}
+function showEditModal(id, name, url, token, username, password, auth, enabled, smart, push, interval){
+    document.getElementById('modalTitle').textContent = 'تعديل اللوحة';
+    document.getElementById('apiForm').action = '/admin/apis/edit/' + id;
+    document.getElementById('fName').value = name || '';
+    document.getElementById('fUrl').value = url || '';
+    document.getElementById('fToken').value = token || '';
+    document.getElementById('fUser').value = username || '';
+    document.getElementById('fPass').value = password || '';
+    document.getElementById('fAuth').value = auth || 'token';
+    document.getElementById('fInterval').value = interval || 60;
+    document.getElementById('fEnabled').checked = !!enabled;
+    document.getElementById('fSmart').checked = !!smart;
+    document.getElementById('fPush').checked = !!push;
+    authChanged();
+    document.getElementById('apiModal').classList.add('show');
+}
+function closeModal(){
+    document.getElementById('apiModal').classList.remove('show');
+}
+function testOne(e, id){
+    e.preventDefault();
+    var box = document.getElementById('test-res-' + id);
+    var accBox = document.getElementById('account-' + id);
+    box.className = 'test-result show';
+    box.textContent = 'جاري الفحص...';
+    accBox.className = 'account-box';
+    accBox.style.display = 'none';
+    fetch('/admin/apis/test/' + id).then(function(r){ return r.json(); }).then(function(d){
+        box.className = 'test-result show ' + (d.ok ? 'ok' : 'err');
+        box.textContent = d.ok ? ('OK — ' + d.count + ' كود') : ('FAIL — ' + (d.error || ''));
+        // عرض معلومات الحساب
+        if(d.account){
+            var a = d.account;
+            var html = '';
+            html += '<div class="account-row"><span class="lbl">اسم المستخدم</span><span class="val">' + (a.username || '—') + '</span></div>';
+            html += '<div class="account-row"><span class="lbl">الاسم</span><span class="val">' + (a.name || '—') + '</span></div>';
+            html += '<div class="account-row"><span class="lbl">الرصيد</span><span class="val gold">' + (a.balance !== undefined ? a.balance : '—') + '</span></div>';
+            html += '<div class="account-row"><span class="lbl">الحالة</span><span class="val ' + (a.is_active ? 'green' : 'red') + '">' + (a.is_active ? 'مفعّل ✓' : 'موقوف ✗') + '</span></div>';
+            html += '<div class="account-row"><span class="lbl">الدور</span><span class="val">' + (a.role || '—') + '</span></div>';
+            html += '<div class="account-row"><span class="lbl">إجمالي الأكواد</span><span class="val">' + (a.total_codes !== undefined ? a.total_codes : '—') + '</span></div>';
+            if(a.created_at){
+                html += '<div class="account-row"><span class="lbl">تاريخ الإنشاء</span><span class="val">' + a.created_at + '</span></div>';
+            }
+            accBox.innerHTML = html;
+            accBox.style.display = 'block';
+        }
+    }).catch(function(err){
+        box.className = 'test-result show err';
+        box.textContent = 'خطأ: ' + err.message;
+    });
+    return false;
+}
+function testAll(){
+    var box = document.getElementById('fetchResult');
+    box.className = 'test-result show';
+    box.textContent = 'جاري الفحص...';
+    fetch('/admin/apis/test-all').then(function(r){ return r.json(); }).then(function(d){
+        var txt = ''; var okCount = 0;
+        d.results.forEach(function(r){
+            if(r.ok){ okCount++; txt += 'OK ' + r.name + ' — ' + r.count + ' كود\n'; }
+            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + '\n'; }
+        });
+        box.className = 'test-result show ' + (okCount > 0 ? 'ok' : 'err');
+        box.textContent = 'النتيجة: ' + okCount + '/' + d.total + '\n\n' + txt;
+    }).catch(function(err){
+        box.className = 'test-result show err';
+        box.textContent = 'خطأ: ' + err.message;
+    });
+}
+function fetchAll(){
+    var box = document.getElementById('fetchResult');
+    box.className = 'test-result show';
+    box.textContent = 'جاري السحب...';
+    fetch('/admin/apis/fetch-now').then(function(r){ return r.json(); }).then(function(d){
+        var txt = 'إجمالي الجديد: ' + d.total_new + '\n\n';
+        d.details.forEach(function(r){
+            if(r.ok){ txt += 'OK ' + r.name + ' — سحب ' + r.fetched + ' / جديد ' + r.new + '\n'; }
+            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + '\n'; }
+        });
+        box.className = 'test-result show ok';
+        box.textContent = txt;
+    }).catch(function(err){
+        box.className = 'test-result show err';
+        box.textContent = 'خطأ: ' + err.message;
+    });
+}
+document.getElementById('apiModal').addEventListener('click', function(e){
+    if(e.target === this) closeModal();
+});
+authChanged();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/admin/apis")
+@admin_required
+def admin_apis():
+    """صفحة إدارة اللوحات"""
+    apis = apis_list()
+    return render_template_string(
+        APIS_ADMIN_HTML,
+        apis=apis,
+        total=len(apis),
+        enabled_count=sum(1 for a in apis if a.get("enabled")),
+        disabled_count=sum(1 for a in apis if not a.get("enabled")),
+        ok_count=sum(1 for a in apis if a.get("last_status") == "ok"),
+        err_count=sum(1 for a in apis if a.get("last_status") == "error")
+    )
+
+
+@app.route("/admin/apis/add", methods=["POST"])
+@admin_required
+def admin_apis_add():
+    name = request.form.get("name", "").strip()
+    url = request.form.get("url", "").strip()
+    if not name or not url:
+        return redirect(url_for("admin_apis"))
+    token = request.form.get("token", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    auth_type = request.form.get("auth_type", "token").strip()
+    enabled = 1 if request.form.get("enabled") == "on" else 0
+    smart_bind = 1 if request.form.get("smart_bind") == "on" else 0
+    auto_push = 1 if request.form.get("auto_push") == "on" else 0
+    try:
+        interval_sec = int(request.form.get("interval_sec", "60") or "60")
+    except Exception:
+        interval_sec = 60
+    if interval_sec < 10:
+        interval_sec = 10
+    apis_add(name, url, token, username, password, auth_type,
+             enabled, smart_bind, auto_push, interval_sec)
+    return redirect(url_for("admin_apis"))
+
+
+@app.route("/admin/apis/edit/<int:aid>", methods=["POST"])
+@admin_required
+def admin_apis_edit(aid):
+    name = request.form.get("name", "").strip()
+    url = request.form.get("url", "").strip()
+    if not name or not url:
+        return redirect(url_for("admin_apis"))
+    fields = {
+        "name": name,
+        "url": url.rstrip('/'),
+        "token": request.form.get("token", "").strip(),
+        "username": request.form.get("username", "").strip(),
+        "password": request.form.get("password", ""),
+        "auth_type": request.form.get("auth_type", "token").strip(),
+        "enabled": 1 if request.form.get("enabled") == "on" else 0,
+        "smart_bind": 1 if request.form.get("smart_bind") == "on" else 0,
+        "auto_push": 1 if request.form.get("auto_push") == "on" else 0,
+    }
+    try:
+        iv = int(request.form.get("interval_sec", "60") or "60")
+        fields["interval_sec"] = iv if iv >= 10 else 10
+    except Exception:
+        fields["interval_sec"] = 60
+    apis_update(aid, **fields)
+    return redirect(url_for("admin_apis"))
+
+
+@app.route("/admin/apis/delete/<int:aid>")
+@admin_required
+def admin_apis_delete(aid):
+    apis_delete(aid)
+    return redirect(url_for("admin_apis"))
+
+
+@app.route("/admin/apis/toggle/<int:aid>")
+@admin_required
+def admin_apis_toggle(aid):
+    apis_toggle(aid)
+    return redirect(url_for("admin_apis"))
+
+
+@app.route("/admin/apis/test/<int:aid>")
+@admin_required
+def admin_apis_test(aid):
+    result = api_test(aid)
+    return jsonify(result)
+
+
+@app.route("/admin/apis/test-all")
+@admin_required
+def admin_apis_test_all():
+    results = apis_test_all()
+    return jsonify({"ok": True, "results": results, "total": len(results)})
+
+
+@app.route("/admin/apis/fetch-now")
+@admin_required
+def admin_apis_fetch_now():
+    """سحب يدوي فوري من كل اللوحات المفعّلة"""
+    apis = apis_list(only_enabled=True)
+    total = 0
+    details = []
+    for a in apis:
+        ok, codes, err = _api_fetch_one(a, limit=50)
+        if not ok:
+            details.append({"name": a.get("name"), "ok": False, "error": err})
+            continue
+        cnt = _process_codes_from_api(a, codes)
+        total += cnt
+        apis_update(a["id"],
+                    last_fetch=time.time(),
+                    last_count=len(codes) if codes else 0,
+                    last_status="ok" if codes else "empty",
+                    last_error="")
+        details.append({"name": a.get("name"), "ok": True, "fetched": len(codes) if codes else 0, "new": cnt})
+    return jsonify({"ok": True, "total_new": total, "details": details})
+
+
 @app.route("/admin/external-api/save", methods=["POST"])
 @admin_required
 def admin_external_api_save():
@@ -15206,6 +15974,10 @@ if __name__ == "__main__":
     print("")
 
     db_init()  # إنشاء/تحديث جداول قاعدة البيانات
+    try:
+        apis_import_legacy()
+    except Exception as _e:
+        print('[APIS] import legacy at startup err:', _e)
     _ensure_platform_icon_pngs()
     print('✅ قاعدة البيانات جاهزة')
     start_telegram_bot()
