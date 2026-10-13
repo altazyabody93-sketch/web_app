@@ -10,7 +10,7 @@ import re
 # على Render: /data (Persistent Disk)
 # على Termux: ~/.otp_persist
 if os.environ.get("RENDER"):
-    _PERSIST_DIR = ""
+    _PERSIST_DIR = "/data"
     if not os.path.exists(_PERSIST_DIR):
         _PERSIST_DIR = os.path.expanduser("~")
 else:
@@ -1810,82 +1810,7 @@ COUNTRIES = {
     "+998": {"ar": "أوزبكستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#0099B5"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#1EB53A"/></svg>'},
     "+58": {"ar": "فنزويلا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#FFCC00"/><rect y="0.67" width="3" height="0.67" fill="#00247D"/><rect y="1.33" width="3" height="0.67" fill="#CF142B"/></svg>'},
     "+84": {"ar": "فيتنام", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#DA251D"/><path d="M1.5,0.5 L1.65,1 L2.15,1 L1.75,1.3 L1.9,1.8 L1.5,1.5 L1.1,1.8 L1.25,1.3 L0.85,1 L1.35,1 Z" fill="#FFCD00"/></svg>'},
-    "+967": {"ar": "اليمن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/></svg>'},
-    "+57": {"ar": "كولومبيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#FCD116"/><rect y="1" width="3" height="0.5" fill="#003893"/><rect y="1.5" width="3" height="0.5" fill="#CE1126"/></svg>'},
-    "+269": {"ar": "جزر القمر", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#fff"/><rect width="3" height="0.5" fill="#FFC61E"/><rect y="0.5" width="3" height="0.5" fill="#fff"/><rect y="1" width="3" height="0.5" fill="#D80027"/><rect y="1.5" width="3" height="0.5" fill="#3A75C4"/><path d="M0,0 L1.1,1 L0,2 Z" fill="#239E46"/></svg>'},
-    "+243": {"ar": "الكونغو الديمقراطية", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#007FFF"/><path d="M0,1.7 L3,0.3" stroke="#F7D618" stroke-width="0.5"/><path d="M0,1.5 L3,0.1" stroke="#CE1021" stroke-width="0.3"/></svg>'},
-    "+242": {"ar": "الكونغو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><path d="M0,0 H3 L0,2 Z" fill="#009543"/><path d="M3,0 V2 H0 Z" fill="#DC241F"/><path d="M0,0 H3 L0,2 Z" fill="#FBDE4A"/></svg>'},
-    "+225": {"ar": "ساحل العاج", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#F77F00"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#009E60"/></svg>'},
-    "+506": {"ar": "كوستاريكا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.34" fill="#002B7F"/><rect y="0.34" width="3" height="0.34" fill="#fff"/><rect y="0.68" width="3" height="0.64" fill="#CE1126"/><rect y="1.32" width="3" height="0.34" fill="#fff"/><rect y="1.66" width="3" height="0.34" fill="#002B7F"/></svg>'},
-    "+53": {"ar": "كوبا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#002A8F"/><rect y="0.4" width="3" height="0.4" fill="#fff"/><rect y="1.2" width="3" height="0.4" fill="#fff"/><path d="M0,0 L1,1 L0,2 Z" fill="#CF142B"/></svg>'},
-    "+253": {"ar": "جيبوتي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#6AB2E7"/><rect y="1" width="3" height="1" fill="#12AD2B"/><path d="M0,0 L1.2,1 L0,2 Z" fill="#fff"/></svg>'},
-    "+593": {"ar": "الإكوادور", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#FFDD00"/><rect y="1" width="3" height="0.5" fill="#034EA2"/><rect y="1.5" width="3" height="0.5" fill="#ED1C24"/></svg>'},
-    "+503": {"ar": "السلفادور", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#0047AB"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0047AB"/></svg>'},
-    "+240": {"ar": "غينيا الاستوائية", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#3E9A00"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#E32118"/><path d="M0,0 L0.8,1 L0,2 Z" fill="#0073CE"/></svg>'},
-    "+291": {"ar": "إريتريا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#12AD2B"/><path d="M0,0 L3,1 L0,2 Z" fill="#4189DD"/><path d="M0,0 L3,1 L0,2 Z" fill="#EA0437"/></svg>'},
-    "+268": {"ar": "إسواتيني", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#3E5EB9"/><rect y="0.4" width="3" height="1.2" fill="#B10C0C"/><rect y="0.55" width="3" height="0.9" fill="#FFD900"/><rect y="0.7" width="3" height="0.6" fill="#3E5EB9"/></svg>'},
-    "+679": {"ar": "فيجي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#68BFE5"/><rect width="1.2" height="1" fill="#012169"/><path d="M0,0 L1.2,1 M1.2,0 L0,1" stroke="#fff" stroke-width="0.15"/></svg>'},
-    "+995": {"ar": "جورجيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#fff"/><rect x="1.3" width="0.4" height="2" fill="#FF0000"/><rect y="0.8" width="3" height="0.4" fill="#FF0000"/></svg>'},
-    "+233": {"ar": "غانا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#FCD116"/><rect y="1.33" width="3" height="0.67" fill="#006B3F"/><path d="M1.5,0.75 L1.65,0.95 L1.9,0.95 L1.7,1.1 L1.8,1.3 L1.5,1.18 L1.2,1.3 L1.3,1.1 L1.1,0.95 L1.35,0.95 Z" fill="#000"/></svg>'},
-    "+502": {"ar": "غواتيمالا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#4997D0"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#4997D0"/></svg>'},
-    "+224": {"ar": "غينيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#CE1126"/><rect x="1" width="1" height="2" fill="#FCD116"/><rect x="2" width="1" height="2" fill="#009460"/></svg>'},
-    "+245": {"ar": "غينيا بيساو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#CE1126"/><rect x="1" width="2" height="1" fill="#FCD116"/><rect x="1" y="1" width="2" height="1" fill="#009E49"/></svg>'},
-    "+592": {"ar": "غيانا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#009E49"/><path d="M0,0 L2.7,1 L0,2 Z" fill="#fff"/><path d="M0,0 L2.4,1 L0,2 Z" fill="#FCD116"/><path d="M0,0 L1.2,1 L0,2 Z" fill="#000"/><path d="M0,0 L0.9,1 L0,2 Z" fill="#CE1126"/></svg>'},
-    "+509": {"ar": "هايتي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#00209F"/><rect y="1" width="3" height="1" fill="#D21034"/></svg>'},
-    "+504": {"ar": "هندوراس", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#0073CF"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0073CF"/></svg>'},
-    "+852": {"ar": "هونغ كونغ", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#DE2910"/><g fill="#fff"><ellipse cx="1.5" cy="0.6" rx="0.18" ry="0.35"/><ellipse cx="1.85" cy="0.95" rx="0.18" ry="0.35" transform="rotate(72 1.85 0.95)"/><ellipse cx="1.72" cy="1.35" rx="0.18" ry="0.35" transform="rotate(144 1.72 1.35)"/><ellipse cx="1.28" cy="1.35" rx="0.18" ry="0.35" transform="rotate(216 1.28 1.35)"/><ellipse cx="1.15" cy="0.95" rx="0.18" ry="0.35" transform="rotate(288 1.15 0.95)"/></g></svg>'},
-    "+36": {"ar": "المجر", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE2939"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#477050"/></svg>'},
-    "+354": {"ar": "آيسلندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#02529C"/><rect x="0.8" width="0.4" height="2" fill="#fff"/><rect y="0.8" width="3" height="0.4" fill="#fff"/><rect x="0.9" width="0.2" height="2" fill="#DC1E35"/><rect y="0.9" width="3" height="0.2" fill="#DC1E35"/></svg>'},
-    "+98": {"ar": "إيران", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#239F40"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#DA0000"/></svg>'},
-    "+962": {"ar": "الأردن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#000"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#007A3D"/><path d="M0,0 L1,1 L0,2 Z" fill="#CE1126"/></svg>'},
-    "+7": {"ar": "كازاخستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#00AFCA"/><circle cx="1.5" cy="0.8" r="0.3" fill="#FEC50C"/></svg>'},
-    "+965": {"ar": "الكويت", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#007A3D"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#CE1126"/><path d="M0,0 L0.7,0.35 L0.7,1.65 L0,2 Z" fill="#000"/></svg>'},
-    "+996": {"ar": "قيرغيزستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#E8112D"/><circle cx="1.5" cy="1" r="0.4" fill="#FFEF00"/></svg>'},
-    "+856": {"ar": "لاوس", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.5" fill="#CE1126"/><rect y="0.5" width="3" height="1" fill="#002868"/><rect y="1.5" width="3" height="0.5" fill="#CE1126"/><circle cx="1.5" cy="1" r="0.25" fill="#fff"/></svg>'},
-    "+266": {"ar": "ليسوتو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#00209F"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#009543"/></svg>'},
-    "+261": {"ar": "مدغشقر", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#fff"/><rect x="1" width="2" height="1" fill="#FC3D32"/><rect x="1" y="1" width="2" height="1" fill="#007E3A"/></svg>'},
-    "+265": {"ar": "ملاوي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#000"/><rect y="0.67" width="3" height="0.67" fill="#CE1126"/><rect y="1.33" width="3" height="0.67" fill="#339E35"/></svg>'},
-    "+223": {"ar": "مالي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#14B53A"/><rect x="1" width="1" height="2" fill="#FCD116"/><rect x="2" width="1" height="2" fill="#CE1126"/></svg>'},
-    "+692": {"ar": "جزر مارشال", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#003893"/><path d="M0,2 L3,0.2" stroke="#DD7500" stroke-width="0.35"/><path d="M0,2 L3,0.2" stroke="#fff" stroke-width="0.2"/></svg>'},
-    "+222": {"ar": "موريتانيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#006233"/><rect y="0.5" width="3" height="0.5" fill="#FFC400"/><rect y="1" width="3" height="0.5" fill="#006233"/></svg>'},
-    "+230": {"ar": "موريشيوس", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.5" fill="#EA2839"/><rect y="0.5" width="3" height="0.5" fill="#1A206D"/><rect y="1" width="3" height="0.5" fill="#FFD500"/><rect y="1.5" width="3" height="0.5" fill="#00A551"/></svg>'},
-    "+258": {"ar": "موزمبيق", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#009739"/><rect y="0.67" width="3" height="0.67" fill="#000"/><rect y="1.33" width="3" height="0.67" fill="#FFD100"/><path d="M0,0 L1,1 L0,2 Z" fill="#D21034"/></svg>'},
-    "+264": {"ar": "ناميبيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#003580"/><path d="M0,0 L3,2" stroke="#fff" stroke-width="0.5"/><path d="M0,0 L3,2" stroke="#D21034" stroke-width="0.25"/></svg>'},
-    "+674": {"ar": "ناورو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#002B7F"/><rect y="0.9" width="3" height="0.2" fill="#FFC72C"/></svg>'},
-    "+505": {"ar": "نيكاراغوا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#0067C6"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0067C6"/></svg>'},
-    "+227": {"ar": "النيجر", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#E05206"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0DB02B"/><circle cx="1.5" cy="1" r="0.25" fill="#E05206"/></svg>'},
-    "+850": {"ar": "كوريا الشمالية", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#024FA2"/><rect y="0.35" width="3" height="1.3" fill="#fff"/><rect y="0.45" width="3" height="1.1" fill="#ED1C27"/><circle cx="0.6" cy="1" r="0.25" fill="#fff"/></svg>'},
-    "+389": {"ar": "مقدونيا الشمالية", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#D20000"/><circle cx="1.5" cy="1" r="0.35" fill="#FFD700"/><path d="M1.5,1 L0,0 M1.5,1 L3,0 M1.5,1 L0,2 M1.5,1 L3,2" stroke="#FFD700" stroke-width="0.2"/></svg>'},
-    "+968": {"ar": "عُمان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#fff"/><rect y="0.67" width="3" height="0.67" fill="#f00"/><rect y="1.33" width="3" height="0.67" fill="#008000"/><rect width="0.75" height="2" fill="#f00"/></svg>'},
-    "+680": {"ar": "بالاو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#4AADD6"/><circle cx="1.2" cy="1" r="0.5" fill="#FFDE00"/></svg>'},
-    "+507": {"ar": "بنما", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1.5" height="1" fill="#fff"/><rect x="1.5" width="1.5" height="1" fill="#D21034"/><rect y="1" width="1.5" height="1" fill="#005293"/><rect x="1.5" y="1" width="1.5" height="1" fill="#fff"/></svg>'},
-    "+675": {"ar": "بابوا غينيا الجديدة", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><path d="M0,0 H3 L0,2 Z" fill="#000"/><path d="M3,0 V2 H0 Z" fill="#CE1126"/><circle cx="0.8" cy="1.2" r="0.15" fill="#fff"/></svg>'},
-    "+595": {"ar": "باراغواي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#D52B1E"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0038A8"/></svg>'},
-    "+250": {"ar": "رواندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#00A1DE"/><rect y="1" width="3" height="0.5" fill="#FAD201"/><rect y="1.5" width="3" height="0.5" fill="#20603D"/></svg>'},
-    "+685": {"ar": "ساموا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#CE1126"/><rect width="1.3" height="1" fill="#002B7F"/><circle cx="0.6" cy="0.5" r="0.15" fill="#fff"/></svg>'},
-    "+378": {"ar": "سان مارينو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#fff"/><rect y="1" width="3" height="1" fill="#5EB6E4"/></svg>'},
-    "+239": {"ar": "ساو تومي وبرينسيب", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#12AD2B"/><rect y="0.67" width="3" height="0.67" fill="#FFCE00"/><path d="M0,0 L0.8,1 L0,2 Z" fill="#D21034"/></svg>'},
-    "+221": {"ar": "السنغال", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1" height="2" fill="#00853F"/><rect x="1" width="1" height="2" fill="#FDEF42"/><rect x="2" width="1" height="2" fill="#E31B23"/><path d="M1.5,0.7 L1.7,1 L1.5,1.3 L1.3,1 Z" fill="#00853F"/></svg>'},
-    "+248": {"ar": "سيشل", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><path d="M0,0 L1.5,2 H0 Z" fill="#003F87"/><path d="M0,0 L2.2,2 H0 Z" fill="#FCD856"/><path d="M0,0 L3,1.5 V2 H0 Z" fill="#D62828"/><path d="M0,0 H3 V0.5 Z" fill="#fff"/><path d="M0,0 H3 V0.3 Z" fill="#007A3D"/></svg>'},
-    "+232": {"ar": "سيراليون", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#1EB53A"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#0072C6"/></svg>'},
-    "+677": {"ar": "جزر سليمان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#0051BA"/><path d="M0,0 L3,2" stroke="#FCD116" stroke-width="0.3"/><path d="M0,0 L3,2" stroke="#fff" stroke-width="0.1"/><path d="M0,0 L3,0 L0,2 Z" fill="#0051BA"/><path d="M0,2 L3,2 L3,0 Z" fill="#215B33"/></svg>'},
-    "+252": {"ar": "الصومال", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#4189DD"/><path d="M1.5,0.4 L1.65,0.9 L2.2,0.9 L1.75,1.2 L1.9,1.7 L1.5,1.4 L1.1,1.7 L1.25,1.2 L0.8,0.9 L1.35,0.9 Z" fill="#fff"/></svg>'},
-    "+211": {"ar": "جنوب السودان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#000"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#078930"/><path d="M0,0 L1,1 L0,2 Z" fill="#DA121A"/><path d="M0.25,0.7 L0.4,1 L0.25,1.3 L0.1,1 Z" fill="#0F47AF"/></svg>'},
-    "+249": {"ar": "السودان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#D21034"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/><path d="M0,0 L0.8,1 L0,2 Z" fill="#007229"/></svg>'},
-    "+211": {"ar": "جنوب السودان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#078930"/><rect y="0.3" width="3" height="0.4" fill="#fff"/><rect y="0.8" width="3" height="0.4" fill="#DA121A"/><rect y="1.3" width="3" height="0.4" fill="#fff"/><path d="M0,0 L1,1 L0,2 Z" fill="#0F47AF"/></svg>'},
-    "+597": {"ar": "سورينام", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#377E3F"/><rect y="0.4" width="3" height="0.3" fill="#fff"/><rect y="0.7" width="3" height="0.6" fill="#B40A2D"/><rect y="1.3" width="3" height="0.3" fill="#fff"/><path d="M1.5,0.75 L1.65,1 L1.5,1.25 L1.35,1 Z" fill="#ECC81D"/></svg>'},
-    "+992": {"ar": "طاجيكستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.5" fill="#CC0000"/><rect y="0.5" width="3" height="0.7" fill="#fff"/><rect y="1.2" width="3" height="0.8" fill="#006600"/></svg>'},
-    "+670": {"ar": "تيمور الشرقية", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#DC241F"/><path d="M0,0 L1.5,1 L0,2 Z" fill="#FFC72C"/><path d="M0,0 L0.9,1 L0,2 Z" fill="#000"/></svg>'},
-    "+228": {"ar": "توغو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#006A4E"/><rect y="0.4" width="3" height="0.4" fill="#FFCE00"/><rect y="1.2" width="3" height="0.4" fill="#FFCE00"/><rect y="0.8" width="3" height="0.4" fill="#FFCE00"/><rect width="1.2" height="1" fill="#D21034"/></svg>'},
-    "+676": {"ar": "تونغا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#C10000"/><rect width="1.2" height="1" fill="#fff"/><path d="M0.6,0.2 V0.8 M0.3,0.5 H0.9" stroke="#C10000" stroke-width="0.15"/></svg>'},
-    "+993": {"ar": "تركمانستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#00843D"/><rect x="0.5" width="0.4" height="2" fill="#D22630"/><path d="M0.6,0.2 L0.8,0.5 L0.6,0.8 L0.4,0.5 Z" fill="#fff"/></svg>'},
-    "+688": {"ar": "توفالو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#5B97B1"/><rect width="1.1" height="0.8" fill="#012169"/><path d="M0,0 L1.1,0.8 M1.1,0 L0,0.8" stroke="#fff" stroke-width="0.12"/></svg>'},
-    "+256": {"ar": "أوغندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.33" fill="#000"/><rect y="0.33" width="3" height="0.33" fill="#FCDC04"/><rect y="0.66" width="3" height="0.33" fill="#D90000"/><rect y="0.99" width="3" height="0.33" fill="#000"/><rect y="1.32" width="3" height="0.33" fill="#FCDC04"/><rect y="1.65" width="3" height="0.35" fill="#D90000"/></svg>'},
-    "+598": {"ar": "أوروغواي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#fff"/><rect y="0.25" width="3" height="0.2" fill="#0038A8"/><rect y="0.65" width="3" height="0.2" fill="#0038A8"/><rect y="1.05" width="3" height="0.2" fill="#0038A8"/><rect y="1.45" width="3" height="0.2" fill="#0038A8"/></svg>'},
-    "+678": {"ar": "فانواتو", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#D21034"/><rect width="3" height="1" fill="#009543"/><path d="M0,0 L1.5,1 L0,2 Z" fill="#000"/><path d="M0,0 L1.5,1 L0,2" stroke="#FCD116" stroke-width="0.15" fill="none"/></svg>'},
-    "+379": {"ar": "الفاتيكان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="1.5" height="2" fill="#fff"/><rect x="1.5" width="1.5" height="2" fill="#FFE000"/></svg>'},
-    "+260": {"ar": "زامبيا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#198A00"/><rect x="1.8" y="1.2" width="0.4" height="0.8" fill="#DE2010"/><rect x="2.2" y="1.2" width="0.4" height="0.8" fill="#000"/><rect x="2.6" y="1.2" width="0.4" height="0.8" fill="#EF7D00"/></svg>'},
-    "+263": {"ar": "زيمبابوي", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.29" fill="#006400"/><rect y="0.29" width="3" height="0.29" fill="#FFD200"/><rect y="0.58" width="3" height="0.29" fill="#D40000"/><rect y="0.87" width="3" height="0.29" fill="#000"/><rect y="1.16" width="3" height="0.29" fill="#D40000"/><rect y="1.45" width="3" height="0.29" fill="#FFD200"/><rect y="1.74" width="3" height="0.26" fill="#006400"/><path d="M0,0 L1,1 L0,2 Z" fill="#fff"/><path d="M0,0.6 L0.4,1 L0,1.4 Z" fill="#D40000"/></svg>'}
+    "+967": {"ar": "اليمن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/></svg>'}
 }
 
 # ============================================================
@@ -1983,17 +1908,17 @@ def parse_otp_message(text):
     result = {"brand": None, "phone_last": None, "code": None, "country_flag": None}
 
     # 1) الماركة (WA | IM | FB ...)
-    brand_match = _re.match(r'^([A-Z]{2,3})s*|', text.strip())
+    brand_match = _re.match(r'^([A-Z]{2,3})\s*\|', text.strip())
     if brand_match:
         result["brand"] = brand_match.group(1)
 
     # 2) العلم
-    flag_match = _re.search(r'([U0001F1E6-U0001F1FF]{2})', text)
+    flag_match = _re.search(r'([\U0001F1E6-\U0001F1FF]{2})', text)
     if flag_match:
         result["country_flag"] = flag_match.group(1)
 
     # 3) الرقم المصغر (آخر 3-5 أرقام)
-    phone_match = _re.search(r'+?(d+)[u2022*u2022]*[u2022*u2022]*(d{3,5})', text)
+    phone_match = _re.search(r'\+?(\d+)[\u2022*\u2022]*[\u2022*\u2022]*(\d{3,5})', text)
     if phone_match:
         result["phone_last"] = phone_match.group(2)
 
@@ -2002,13 +1927,13 @@ def parse_otp_message(text):
     # 4) البحث عن الكود بذكاء
     # نمط 1: بعد كلمات مفتاحية (رمز، code، OTP، verification)
     keyword_patterns = [
-        r'(?:رمز|كود|code|OTP|otp)s*[^:]*[:s]s*([d-]{4,12})',
-        r'(?:verification|verify)s+(?:code)?[:s]s*([d-]{4,12})',
-        r'[:s]([d]{4,9})(?:s|$|n)',
+        r'(?:رمز|كود|code|OTP|otp)\s*[^:]*[:\s]\s*([\d\-]{4,12})',
+        r'(?:verification|verify)\s+(?:code)?[:\s]\s*([\d\-]{4,12})',
+        r'[:\s]([\d]{4,9})(?:\s|$|\n)',
     ]
 
     # اجمع كل الأرقام في الرسالة
-    all_numbers = _re.findall(r'b(d{4,9})b', text)
+    all_numbers = _re.findall(r'\b(\d{4,9})\b', text)
 
     candidates = []
     for n in all_numbers:
@@ -2082,7 +2007,7 @@ def save_telegram_code(parsed, full_msg, selected_platform=""):
                 parts.append("الرقم: " + str(phone_last))
             if code:
                 parts.append("الكود: " + str(code))
-            body = "n".join(parts) if parts else (str(brand) + " | " + str(code))
+            body = "\n".join(parts) if parts else (str(brand) + " | " + str(code))
 
             # أرسل مع أيقونة المنصة
             send_push_to_all(
@@ -2170,7 +2095,7 @@ def fetch_external_codes():
 # ═══════════════════════════════════════════
 def _normalize_phone(p):
     """توحيد شكل الرقم"""
-    p = re.sub(r"[^d+]", "", str(p or ""))
+    p = re.sub(r"[^\d+]", "", str(p or ""))
     if p.startswith("+"):
         p = p[1:]
     return p
@@ -2229,7 +2154,7 @@ def smart_bind_code(item):
     app = (item.get("app_name") or item.get("service") or item.get("app") or "")
 
     if not code_val and msg:
-        m = re.findall(r"b(d{4,8})b", msg)
+        m = re.findall(r"\b(\d{4,8})\b", msg)
         if m:
             code_val = m[0]
 
@@ -2521,7 +2446,7 @@ def _process_codes_from_api(api, codes):
             try:
                 send_push_to_all(
                     title="كود جديد — " + (bind["platform"] or api_name),
-                    body="الرقم: " + bind["phone"][-5:] + "nالكود: " + bind["code"],
+                    body="الرقم: " + bind["phone"][-5:] + "\nالكود: " + bind["code"],
                     url="/"
                 )
             except Exception:
@@ -2688,10 +2613,10 @@ def load_numbers():
     with open(NUMBERS_FILE, "r", encoding="utf-8") as f:
         raw = f.read()
     # ═══ افصل الكتل بأسطر فارغة ═══
-    chunks = re.split(r'ns*n', raw.strip())
+    chunks = re.split(r'\n\s*\n', raw.strip())
     data = {}
     for chunk in chunks:
-        chunk_lines = [l.strip() for l in chunk.split("n") if l.strip()]
+        chunk_lines = [l.strip() for l in chunk.split("\n") if l.strip()]
         if not chunk_lines:
             continue
         # أول عنوان = منصة
@@ -2747,7 +2672,7 @@ def save_numbers_tree(data):
                 lines.append(n)
         lines.append("")
     with open(NUMBERS_FILE, "w", encoding="utf-8") as f:
-        f.write("n".join(lines))
+        f.write("\n".join(lines))
 
 def get_numbers_tree():
     return load_numbers()
@@ -4126,7 +4051,7 @@ function renderPlatforms(){
         const icon = PLATFORM_ICONS[p] || PLATFORM_ICONS['أخرى'];
         const count = Object.keys(TREE[p]).length;
         const displayName = platformName(p);
-        return '<div class="card" style="padding:12px;gap:8px;margin:0;min-width:0;position:relative" onclick="selectPlatform('' + p.replace(/'/g, "'") + '')">' +
+        return '<div class="card" style="padding:12px;gap:8px;margin:0;min-width:0;position:relative" onclick="selectPlatform(\'' + p.replace(/'/g, "\'") + '\')">' +
             '<div class="card-count" style="position:absolute;top:6px;left:6px;margin:0;font-size:10px;padding:2px 7px;min-width:auto;background:var(--gradient)">' + count + '</div>' +
             '<div class="card-icon" style="width:40px;height:40px;background:transparent;padding:0;flex-shrink:0">' + icon + '</div>' +
             '<div class="card-name" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:visible">' + displayName + '</div>' +
@@ -4166,7 +4091,7 @@ function renderCountries(){
         const nums = TREE[currentPlatform][c];
         const flag = getFlag(c);
         const displayName = countryName(c);
-        return '<div class="card" onclick="selectCountry('' + c.replace(/'/g, "'") + '')">' +
+        return '<div class="card" onclick="selectCountry(\'' + c.replace(/'/g, "\'") + '\')">' +
             '<div class="card-icon">' + flag + '</div>' +
             '<div class="card-name">' + displayName + '</div>' +
             '<div class="card-count">' + nums.length + '</div>' +
@@ -4200,7 +4125,7 @@ function selectCountry(name){
 function getFlag(country){
     const nums = TREE[currentPlatform][country];
     if(!nums || nums.length === 0) return PLATFORM_ICONS['أخرى'];
-    const first = nums[0].replace(/s/g, '');
+    const first = nums[0].replace(/\s/g, '');
     for(const code in COUNTRY_DATA){
         if(first.startsWith(code)) return COUNTRY_DATA[code].flag;
     }
@@ -4242,7 +4167,7 @@ function renderNumbers(){
                 '<div class="num-country">' + countryName(currentCountry) + '</div>' +
                 '<div class="num-phone">' + n + '</div>' +
             '</div>' +
-            '<button class="copy-btn" onclick="copyNumber(this, '' + n + '')">' +
+            '<button class="copy-btn" onclick="copyNumber(this, \'' + n + '\')">' +
                 '<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>' +
             '</button>' +
         '</div>'
@@ -4276,7 +4201,7 @@ function renderNumbers(){
                         '<span class="cd-num">60</span>' +
                     '</div>' +
                     '<span class="code-num-big">' + item.code + '</span>' +
-                    '<button class="code-cp" onclick="copyNumber(this, '' + item.code + '')">' +
+                    '<button class="code-cp" onclick="copyNumber(this, \'' + item.code + '\')">' +
                         '<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>' +
                     '</button>' +
                 '</div>' +
@@ -4358,7 +4283,7 @@ function goBack(){
 
 function copyAllCodes(){
     if(savedCodes.length === 0) return;
-    const text = savedCodes.map(c => c.phone + ' → ' + c.code).join('n');
+    const text = savedCodes.map(c => c.phone + ' → ' + c.code).join('\n');
     navigator.clipboard.writeText(text).then(() => {
         const toast = document.getElementById('toast');
         toast.textContent = 'تم نسخ ' + savedCodes.length + ' أكواد!';
@@ -4577,7 +4502,7 @@ async function checkNotice(){
         var SVG_INFO = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
         var SVG_WARN = '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
         var SVG_OK = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-        var SVG_ERR = ""0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
+        var SVG_ERR = '<svg viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
         if(type === 'warning'){ bar.classList.add('warning'); icon.innerHTML = SVG_WARN; }
         else if(type === 'success'){ bar.classList.add('success'); icon.innerHTML = SVG_OK; }
         else if(type === 'danger'){ bar.classList.add('danger'); icon.innerHTML = SVG_ERR; }
@@ -5037,10 +4962,10 @@ function openHistory(){
 
 function openAbout(){
     closeSheet();
-    var msg = '📱 أرقام OTPnn' +
-              'موقع لاستقبال أكواد التحققn' +
-              'من قنوات تيليجرام تلقائياًnn' +
-              'الإصدار: 1.0n' +
+    var msg = '📱 أرقام OTP\n\n' +
+              'موقع لاستقبال أكواد التحقق\n' +
+              'من قنوات تيليجرام تلقائياً\n\n' +
+              'الإصدار: 1.0\n' +
               'صُنع بـ ❤️';
     alert(msg);
 }
@@ -5379,7 +5304,7 @@ window.__pushInit = true;
 (function(){
     function urlBase64ToUint8Array(base64String){
         var padding = "=".repeat((4 - base64String.length % 4) % 4);
-        var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+        var base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
         var rawData = atob(base64);
         var outputArray = new Uint8Array(rawData.length);
         for(var i = 0; i < rawData.length; ++i){
@@ -5558,7 +5483,7 @@ document.addEventListener("click", function(e){
             var SVG_INFO = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
             var SVG_WARN = '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
             var SVG_OK = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-            var SVG_ERR = ""0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
+            var SVG_ERR = '<svg viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
             if(t === 'warning'){ bar.classList.add('warning'); icon.innerHTML = SVG_WARN; }
             else if(t === 'success'){ bar.classList.add('success'); icon.innerHTML = SVG_OK; }
             else if(t === 'danger'){ bar.classList.add('danger'); icon.innerHTML = SVG_ERR; }
@@ -5829,7 +5754,7 @@ window.toggleLiteMode = function(){
                 var SVG_INFO = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
                 var SVG_WARN = '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
                 var SVG_OK = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-                var SVG_ERR = ""0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
+                var SVG_ERR = '<svg viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
                 if(t === 'warning'){ bar.classList.add('warning'); if(icon) icon.innerHTML = SVG_WARN; }
                 else if(t === 'success'){ bar.classList.add('success'); if(icon) icon.innerHTML = SVG_OK; }
                 else if(t === 'danger'){ bar.classList.add('danger'); if(icon) icon.innerHTML = SVG_ERR; }
@@ -6307,7 +6232,7 @@ body{background:#0a0a0f;color:#f5f5f7}
 <script>
 const EMOJIS = ["😀","😂","😍","🥰","😎","🤔","😢","😡","👍","👎","❤️","🔥","✨","💯","🙏","🤝"];
 const emojiPanel = document.getElementById('emojiPanel');
-emojiPanel.innerHTML = EMOJIS.map(function(e){ return '<button type="button" onclick="addEmoji('' + e + '')">' + e + '</button>'; }).join('');
+emojiPanel.innerHTML = EMOJIS.map(function(e){ return '<button type="button" onclick="addEmoji(\'' + e + '\')">' + e + '</button>'; }).join('');
 
 function toggleEmoji(e){
     e.preventDefault();
@@ -6641,7 +6566,7 @@ const TICKET_CODE = "{{ ticket.code }}";
 
 const EMOJIS = ["😀","😂","😍","🥰","😎","🤔","😢","😡","👍","👎","❤️","🔥","","✨","","💯","🙏","","","🤝"];
 const emojiPanel = document.getElementById('emojiPanel');
-emojiPanel.innerHTML = EMOJIS.map(e => '<button type="button" onclick="addEmoji('' + e + '')">' + e + '</button>').join('');
+emojiPanel.innerHTML = EMOJIS.map(e => '<button type="button" onclick="addEmoji(\'' + e + '\')">' + e + '</button>').join('');
 
 function toggleEmoji(e){
     e.preventDefault();
@@ -7293,7 +7218,7 @@ function extApiTest(){
     fetch("/admin/external-api/test").then(function(r){return r.json()}).then(function(d){
         if(d.ok){
             b.style.color = "#00d4a5";
-            b.textContent = "✅ الاتصال ناجحnالمسار: " + d.path + "nالحالة: " + d.status + "nعدد الأكواد: " + d.count + "nnعينة:n" + d.sample;
+            b.textContent = "✅ الاتصال ناجح\nالمسار: " + d.path + "\nالحالة: " + d.status + "\nعدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
         } else {
             b.style.color = "#ff6b8a";
             b.textContent = "❌ فشل: " + (d.error || "غير معروف");
@@ -7306,7 +7231,7 @@ function extApiFetchNow(){
     fetch("/admin/external-api/fetch-now").then(function(r){return r.json()}).then(function(d){
         if(d.ok){
             b.style.color = "#00d4a5";
-            b.textContent = "✅ تم السحب — عدد الأكواد: " + d.count + "nnعينة:n" + d.sample;
+            b.textContent = "✅ تم السحب — عدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
         } else {
             b.style.color = "#ff6b8a"; b.textContent = "❌ فشل";
         }
@@ -7318,14 +7243,14 @@ function extApiStatus(){
     fetch("/admin/external-api/status").then(function(r){return r.json()}).then(function(d){
         b.style.color = "#00d4ff";
         b.textContent =
-            "📊 حالة API الخارجيn" +
-            "الرابط: " + d.url + "n" +
-            "التوكن: " + (d.has_token ? "✓" : "✗") + "n" +
-            "مفعّل: " + (d.enabled ? "✓" : "✗") + "n" +
-            "آخر سحب: " + (d.last_fetch ? new Date(d.last_fetch*1000).toLocaleString() : "لا يوجد") + "n" +
-            "آخر عدد: " + d.last_count + "n" +
-            "الحالة: " + d.last_status + "n" +
-            "الخطأ: " + (d.last_error || "لا يوجد") + "n" +
+            "📊 حالة API الخارجي\n" +
+            "الرابط: " + d.url + "\n" +
+            "التوكن: " + (d.has_token ? "✓" : "✗") + "\n" +
+            "مفعّل: " + (d.enabled ? "✓" : "✗") + "\n" +
+            "آخر سحب: " + (d.last_fetch ? new Date(d.last_fetch*1000).toLocaleString() : "لا يوجد") + "\n" +
+            "آخر عدد: " + d.last_count + "\n" +
+            "الحالة: " + d.last_status + "\n" +
+            "الخطأ: " + (d.last_error || "لا يوجد") + "\n" +
             "أكواد في الذاكرة: " + d.codes_in_memory;
     }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
 }
@@ -7610,7 +7535,7 @@ document.addEventListener('DOMContentLoaded', function(){ previewHeaderIcon(); }
 async function resetSection(what){
     var labels = {colors:'الألوان', texts:'النصوص', icons:'الأيقونات', all:'كل التخصيص'};
     var msg = what === 'all'
-        ? 'إعادة كل التخصيص للافتراضي؟nnهذا سيمسح:n- كل الألوانn- كل النصوصn- كل الأيقوناتnnهل أنت متأكد؟'
+        ? 'إعادة كل التخصيص للافتراضي؟\n\nهذا سيمسح:\n- كل الألوان\n- كل النصوص\n- كل الأيقونات\n\nهل أنت متأكد؟'
         : 'إعادة ' + labels[what] + ' للافتراضي؟';
     if(!confirm(msg)) return;
     try {
@@ -8165,16 +8090,16 @@ window._adminPushFixed = true;
             .then(function(d){
                 var h = "";
                 if(!d.ready){
-                    h = "<b style='color:#ff6b8a'>pywebpush غير مثبت</b><br><br>ثبت بـ:<br><code style='direction:ltr;display:inline-block;margin-top:6px'>pip install pywebpush</code>";
+                    h = "<b style=\'color:#ff6b8a\'>pywebpush غير مثبت</b><br><br>ثبت بـ:<br><code style=\'direction:ltr;display:inline-block;margin-top:6px\'>pip install pywebpush</code>";
                 } else {
-                    h = "<b style='color:#00d4a5'>النظام شغال</b><br>";
-                    h += "عدد المشتركين: <b style='color:#00d4ff'>" + d.subs + "</b><br>";
-                    h += "VAPID: <b style='color:#00d4a5'>" + (d.has_vapid ? "موجود" : "ناقص") + "</b>";
+                    h = "<b style=\'color:#00d4a5\'>النظام شغال</b><br>";
+                    h += "عدد المشتركين: <b style=\'color:#00d4ff\'>" + d.subs + "</b><br>";
+                    h += "VAPID: <b style=\'color:#00d4a5\'>" + (d.has_vapid ? "موجود" : "ناقص") + "</b>";
                 }
                 b.innerHTML = h;
             })
             .catch(function(e){
-                b.innerHTML = "<b style='color:#ff6b8a'>خطأ: " + e.message + "</b>";
+                b.innerHTML = "<b style=\'color:#ff6b8a\'>خطأ: " + e.message + "</b>";
             });
     }
 
@@ -8477,7 +8402,7 @@ document.addEventListener("click", function(e){
 
 <script>
 async function adminClearCache(){
-    if(!confirm('مسح كاش جميع المستخدمين؟nnهذا سيجبر كل المتصفحات على تحديث الموقع فوراً.')) return;
+    if(!confirm('مسح كاش جميع المستخدمين؟\n\nهذا سيجبر كل المتصفحات على تحديث الموقع فوراً.')) return;
     var btns = document.querySelectorAll('.cache-btn');
     btns.forEach(function(b){ b.disabled = true; b.innerHTML = '⏳ جاري المسح...'; });
     try {
@@ -8485,7 +8410,7 @@ async function adminClearCache(){
         var d = await r.json();
         if(d.ok){
             await _selfClearCache();
-            alert('✅ تم إرسال أمر المسحnعدد المتصلين: ' + (d.clients || 0) + 'nnسيتم تحديث متصفحك الآن...');
+            alert('✅ تم إرسال أمر المسح\nعدد المتصلين: ' + (d.clients || 0) + '\n\nسيتم تحديث متصفحك الآن...');
             setTimeout(function(){ window.location.reload(true); }, 800);
         } else {
             alert('❌ فشل: ' + (d.error || ''));
@@ -9520,7 +9445,7 @@ function loadList(){
                         '<a href="/admin/backup/download/' + encodeURIComponent(b.name) + '" class="act-btn dl" title="تحميل">' +
                             '<svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>' +
                         '</a>' +
-                        '<form method="POST" action="/admin/backup/delete/' + encodeURIComponent(b.name) + '" style="display:inline" onsubmit="return confirm('حذف النسخة؟')">' +
+                        '<form method="POST" action="/admin/backup/delete/' + encodeURIComponent(b.name) + '" style="display:inline" onsubmit="return confirm(\'حذف النسخة؟\')">' +
                             '<button type="submit" class="act-btn rm" title="حذف">' +
                                 '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>' +
                             '</button>' +
@@ -10217,7 +10142,7 @@ def admin_telegram_send_test():
     if not token or not chat:
         return jsonify({"ok": False, "error": "التوكن أو Chat ID ناقص"})
     try:
-        text = "اختبار من موقع أرقام OTPnالبوت شغال بنجاح!"
+        text = "اختبار من موقع أرقام OTP\nالبوت شغال بنجاح!"
         url = "https://api.telegram.org/bot" + token + "/sendMessage"
         params = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
         req = urllib.request.Request(url, data=params, method="POST")
@@ -10500,11 +10425,11 @@ function testAll(){
     fetch('/admin/apis/test-all').then(function(r){ return r.json(); }).then(function(d){
         var txt = ''; var okCount = 0;
         d.results.forEach(function(r){
-            if(r.ok){ okCount++; txt += 'OK ' + r.name + ' — ' + r.count + ' كودn'; }
-            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + 'n'; }
+            if(r.ok){ okCount++; txt += 'OK ' + r.name + ' — ' + r.count + ' كود\n'; }
+            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + '\n'; }
         });
         box.className = 'test-result show ' + (okCount > 0 ? 'ok' : 'err');
-        box.textContent = 'النتيجة: ' + okCount + '/' + d.total + 'nn' + txt;
+        box.textContent = 'النتيجة: ' + okCount + '/' + d.total + '\n\n' + txt;
     }).catch(function(err){
         box.className = 'test-result show err';
         box.textContent = 'خطأ: ' + err.message;
@@ -10515,10 +10440,10 @@ function fetchAll(){
     box.className = 'test-result show';
     box.textContent = 'جاري السحب...';
     fetch('/admin/apis/fetch-now').then(function(r){ return r.json(); }).then(function(d){
-        var txt = 'إجمالي الجديد: ' + d.total_new + 'nn';
+        var txt = 'إجمالي الجديد: ' + d.total_new + '\n\n';
         d.details.forEach(function(r){
-            if(r.ok){ txt += 'OK ' + r.name + ' — سحب ' + r.fetched + ' / جديد ' + r.new + 'n'; }
-            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + 'n'; }
+            if(r.ok){ txt += 'OK ' + r.name + ' — سحب ' + r.fetched + ' / جديد ' + r.new + '\n'; }
+            else { txt += 'FAIL ' + r.name + ' — ' + (r.error || '') + '\n'; }
         });
         box.className = 'test-result show ok';
         box.textContent = txt;
@@ -10859,7 +10784,7 @@ def admin_add_numbers_existing():
             text = file.read().decode("utf-8")
         except:
             text = file.read().decode("latin-1")
-        for l in text.split("n"):
+        for l in text.split("\n"):
             l = l.strip()
             if not l:
                 continue
@@ -10900,7 +10825,7 @@ def admin_upload_file():
             text = file.read().decode("utf-8")
         except:
             text = file.read().decode("latin-1")
-        lines = [l.strip() for l in text.split("n") if l.strip()]
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
         for l in lines:
             if l.startswith("+"):
                 numbers.append(l)
@@ -10932,7 +10857,7 @@ def admin_upload_file():
             for n in nums:
                 text_lines.append(n)
         text_lines.append("")
-    save_numbers_text("n".join(text_lines))
+    save_numbers_text("\n".join(text_lines))
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/delete-country/<platform>/<country>")
@@ -10949,7 +10874,7 @@ def admin_delete_country(platform, country):
                 for n in nums:
                     text_lines.append(n)
             text_lines.append("")
-        save_numbers_text("n".join(text_lines))
+        save_numbers_text("\n".join(text_lines))
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/delete-platform/<platform>")
@@ -10966,7 +10891,7 @@ def admin_delete_platform(platform):
                 for n in nums:
                     text_lines.append(n)
             text_lines.append("")
-        save_numbers_text("n".join(text_lines))
+        save_numbers_text("\n".join(text_lines))
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/clear-numbers")
@@ -11260,7 +11185,7 @@ def _detect_device(ua):
     model = "غير معروف"
     # iPhone
     import re as _re2
-    iphone_match = _re2.search(r'iPhone(?:s*OSs*[d_]+)?', ua)
+    iphone_match = _re2.search(r'iPhone(?:\s*OS\s*[\d_]+)?', ua)
     if iphone_match:
         model = "iPhone"
     # iPad
@@ -11269,11 +11194,11 @@ def _detect_device(ua):
     # Android - نستخرج الموديل
     elif "android" in ua_l:
         # النمط: Android X.X; BRAND MODEL Build
-        m = _re2.search(r'Android[^;]*;s*([^;)]+?)(?:s+Build|s*))', ua)
+        m = _re2.search(r'Android[^;]*;\s*([^;)]+?)(?:\s+Build|\s*\))', ua)
         if m:
             model = m.group(1).strip()
             # تنظيف
-            model = _re2.sub(r's+', ' ', model)
+            model = _re2.sub(r'\s+', ' ', model)
             # تصحيح أسماء ماركات شائعة
             model_l = model.lower()
             if model_l.startswith("sm-"): model = "Samsung " + model
@@ -11888,28 +11813,28 @@ def start_cloudflare_tunnel(port=5000):
             url_found = False
             for line in iter(proc.stdout.readline, ""):
                 # ابحث عن الرابط
-                m = _re_tunnel.search(r'https://[a-z0-9-]+.trycloudflare.com', line)
+                m = _re_tunnel.search(r'https://[a-z0-9\-]+\.trycloudflare\.com', line)
                 if m and not url_found:
                     url = m.group(0)
                     _public_url["url"] = url
                     url_found = True
                     # اطبع الرابط بلون مميز
                     print("")
-                    print("033[38;5;48m033[1m  ╔══════════════════════════════════════════════════╗033[0m")
-                    print("033[38;5;48m033[1m  ║  🌐  الرابط العام (استخدمه من أي جوال):           ║033[0m")
-                    print("033[38;5;48m033[1m  ╚══════════════════════════════════════════════════╝033[0m")
+                    print("\033[38;5;48m\033[1m  ╔══════════════════════════════════════════════════╗\033[0m")
+                    print("\033[38;5;48m\033[1m  ║  🌐  الرابط العام (استخدمه من أي جوال):           ║\033[0m")
+                    print("\033[38;5;48m\033[1m  ╚══════════════════════════════════════════════════╝\033[0m")
                     print("")
-                    print("033[38;5;51m033[1m     " + url + "033[0m")
+                    print("\033[38;5;51m\033[1m     " + url + "\033[0m")
                     print("")
-                    print("033[38;5;220m     🔓  لوحة الأدمن: " + url + "/admin033[0m")
-                    print("033[38;5;213m     🔑  كلمة السر: admin2025033[0m")
+                    print("\033[38;5;220m     🔓  لوحة الأدمن: " + url + "/admin\033[0m")
+                    print("\033[38;5;213m     🔑  كلمة السر: admin2025\033[0m")
                     print("")
-                    print("033[38;5;245m     ⚠️  الرابط يتغير في كل تشغيل — انسخه الآن033[0m")
+                    print("\033[38;5;245m     ⚠️  الرابط يتغير في كل تشغيل — انسخه الآن\033[0m")
                     print("")
         except FileNotFoundError:
-            print("033[38;5;203m⚠️  cloudflared غير مثبت — التثبيت: pkg install cloudflared033[0m")
+            print("\033[38;5;203m⚠️  cloudflared غير مثبت — التثبيت: pkg install cloudflared\033[0m")
         except Exception as e:
-            print("033[38;5;203m⚠️  خطأ tunnel: " + str(e) + "033[0m")
+            print("\033[38;5;203m⚠️  خطأ tunnel: " + str(e) + "\033[0m")
 
     import threading as _th
     t = _th.Thread(target=_run, daemon=True)
@@ -16410,22 +16335,22 @@ def admin_custom_save():
 if __name__ == "__main__":
     # ═══ رسالة التشغيل المميزة (ملونة) ═══
     # ألوان ANSI
-    R = ""        # reset
-    B = ""        # bold
-    DIM = ""      # dim
+    R = "\033[0m"        # reset
+    B = "\033[1m"        # bold
+    DIM = "\033[2m"      # dim
 
     # ألوان
-    PURPLE = ""    # بنفسجي
-    CYAN = ""       # سماوي
-    GREEN = ""      # أخضر
-    YELLOW = ""    # أصفر
-    RED = ""       # أحمر
-    GRAY = ""      # رمادي
-    WHITE = ""     # أبيض
-    ORANGE = ""    # برتقالي
-    PINK = ""      # وردي
-    BG_PURPLE = ""  # خلفية بنفسجية
-    BG_DARK = ""    # خلفية داكنة
+    PURPLE = "\033[38;5;141m"    # بنفسجي
+    CYAN = "\033[38;5;51m"       # سماوي
+    GREEN = "\033[38;5;48m"      # أخضر
+    YELLOW = "\033[38;5;220m"    # أصفر
+    RED = "\033[38;5;203m"       # أحمر
+    GRAY = "\033[38;5;245m"      # رمادي
+    WHITE = "\033[38;5;255m"     # أبيض
+    ORANGE = "\033[38;5;215m"    # برتقالي
+    PINK = "\033[38;5;213m"      # وردي
+    BG_PURPLE = "\033[48;5;54m"  # خلفية بنفسجية
+    BG_DARK = "\033[48;5;17m"    # خلفية داكنة
 
     print("")
     print(PURPLE + "╔══════════════════════════════════════════════════════╗" + R)
