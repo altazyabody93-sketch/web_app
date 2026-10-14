@@ -1811,7 +1811,8 @@ COUNTRIES = {
     "+58": {"ar": "فنزويلا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#FFCC00"/><rect y="0.67" width="3" height="0.67" fill="#00247D"/><rect y="1.33" width="3" height="0.67" fill="#CF142B"/></svg>'},
     "+84": {"ar": "فيتنام", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#DA251D"/><path d="M1.5,0.5 L1.65,1 L2.15,1 L1.75,1.3 L1.9,1.8 L1.5,1.5 L1.1,1.8 L1.25,1.3 L0.85,1 L1.35,1 Z" fill="#FFCD00"/></svg>'},
     "+967": {"ar": "اليمن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/></svg>'},
-    "+256": {"ar": "أوغندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#000"/><rect y="1" width="3" height="1" fill="#FCDC04"/><rect y="2" width="3" height="1" fill="#D90000"/><circle cx="1.5" cy="1.5" r="0.4" fill="#fff"/></svg>'}
+    "+256": {"ar": "أوغندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#000"/><rect y="1" width="3" height="1" fill="#FCDC04"/><rect y="2" width="3" height="1" fill="#D90000"/><circle cx="1.5" cy="1.5" r="0.4" fill="#fff"/></svg>'},
+    "+593": {"ar": "الإكوادور", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#FFD100"/><rect y="1" width="3" height="0.5" fill="#0072CE"/><rect y="1.5" width="3" height="0.5" fill="#EF3340"/></svg>'}
 }
 
 # ============================================================
@@ -2439,13 +2440,14 @@ def _process_codes_from_api(api, codes):
             try:
                 send_push_to_all(
                     title="كود جديد - " + platform,
-                    body="الرقم: " + phone[-5:] + "\nالكود: " + code_val,
+                    body="الرقم: " + phone[-5:] + "\n" + "الكود: " + code_val,
                     url="/"
                 )
             except Exception:
                 pass
 
     return new_count
+
 
 def external_api_poll():
     """Poller متعدد — يقرأ كل اللوحات المفعّلة من DB"""
@@ -4115,6 +4117,10 @@ function selectCountry(name){
 }
 
 function getFlag(country){
+    // "دول أخرى" ما لها علم محدد
+    if(country === "دول أخرى" || country === "غير معروف"){
+        return PLATFORM_ICONS['أخرى'];
+    }
     const nums = TREE[currentPlatform][country];
     if(!nums || nums.length === 0) return PLATFORM_ICONS['أخرى'];
     const first = nums[0].replace(/\s/g, '');
@@ -9797,7 +9803,7 @@ def api_check_otp(phone):
     except Exception:
         pass
 
-    # 1. ابحث في أكواد تيليجرام (الذاكرة)
+    # 1. ابحث في أكواد تيليجرام
     tg_entry = find_telegram_code(phone)
     if tg_entry:
         return jsonify({
@@ -9808,7 +9814,7 @@ def api_check_otp(phone):
             "status": "received"
         })
 
-    # 2. ابحث في codes.json (أكواد اللوحات الخارجية)
+    # 2. ابحث في codes.json (أكواد اللوحات)
     try:
         clean = phone.replace(" ", "").replace("+", "").replace("-", "")
         last4 = clean[-4:] if len(clean) >= 4 else clean
@@ -9821,7 +9827,6 @@ def api_check_otp(phone):
             c_phone = (c.get("phone") or "").replace(" ", "").replace("+", "").replace("-", "")
             if not c_phone:
                 continue
-            # مطابقة ذكية: آخر 5 أو 7 أو 4 أرقام
             match = False
             if c_phone == clean:
                 match = True
@@ -9829,11 +9834,12 @@ def api_check_otp(phone):
                 match = True
             elif len(c_phone) >= 7 and len(clean) >= 7 and c_phone[-7:] == last7:
                 match = True
-            elif c_phone.endswith(last5) or last5.endswith(c_phone[-5:] if len(c_phone) >= 5 else c_phone):
+            elif len(c_phone) >= 5 and c_phone[-5:] == last5:
+                match = True
+            elif len(c_phone) >= 4 and c_phone[-4:] == last4:
                 match = True
 
             if match:
-                # تحقق من صلاحية الوقت (آخر 15 دقيقة)
                 age = now - c.get("timestamp", 0)
                 if age < 900:
                     return jsonify({
@@ -9846,15 +9852,15 @@ def api_check_otp(phone):
                         "age_sec": int(age)
                     })
     except Exception as e:
-        print("[API-CHECK-OTP] codes.json err:", e)
+        print("[API-CHECK-OTP] err:", e)
 
-    # 3. لا يوجد كود
     return jsonify({
         "phone": phone,
         "code": None,
         "source": "none",
         "status": "waiting"
     })
+
 
 @app.route("/api/telegram/codes")
 @admin_required
@@ -16436,6 +16442,14 @@ textarea{font-family:monospace;font-size:11px;direction:ltr;text-align:left;resi
 </div>
 
 <div class="wrap">
+<div style="background:linear-gradient(160deg,rgba(0,212,165,.08),rgba(0,184,148,.03));border:1px solid rgba(0,212,165,.3);border-radius:16px;padding:14px;margin-bottom:16px">
+<h3 style="color:#00d4a5;font-size:14px;font-weight:800;margin-bottom:8px">إعادة تصنيف الأرقام</h3>
+<p style="font-size:12px;color:#8e8eab;line-height:1.6;margin-bottom:12px">عند إضافة دول جديدة، اضغط الزر لإعادة تصنيف كل الأرقام في numbers.txt حسب الدول المعروفة.</p>
+<form method="POST" action="/admin/countries/reclassify">
+<button type="submit" class="btn" style="background:linear-gradient(135deg,#00d4a5,#00b894);margin-top:0" onclick="return confirm(\'إعادة تصنيف كل الأرقام؟\')">إعادة التصنيف الآن</button>
+</form>
+</div>
+
 <div class="add-box">
 <h2>إضافة دولة جديدة</h2>
 <form method="POST" action="/admin/countries/add">
@@ -16548,6 +16562,24 @@ def admin_countries_delete(code):
         return redirect("/admin/countries?msg=" + msg + " — أعد تشغيل السيرفر&type=ok")
     else:
         return redirect("/admin/countries?msg=" + msg + "&type=err")
+
+
+
+
+@app.route("/admin/countries/reclassify", methods=["POST"])
+@admin_required
+def admin_countries_reclassify():
+    """يعيد تصنيف كل الأرقام حسب COUNTRIES"""
+    try:
+        before = reclassify_now()
+        ok, msg = reclassify_numbers_file()
+        after = reclassify_now()
+        if ok:
+            return redirect("/admin/countries?msg=" + "تم إعادة التصنيف (" + str(before) + " -> " + str(after) + ")&type=ok")
+        else:
+            return redirect("/admin/countries?msg=" + str(msg) + "&type=err")
+    except Exception as e:
+        return redirect("/admin/countries?msg=خطأ: " + str(e) + "&type=err")
 
 
 # ============================================================
@@ -16698,6 +16730,109 @@ class _country_utils:
             })
 
         return result
+
+
+def reclassify_numbers_file(file_path=None):
+    """يعيد تصنيف كل الأرقام في numbers.txt حسب COUNTRIES"""
+    if file_path is None:
+        file_path = NUMBERS_FILE
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except Exception as e:
+        return False, "read err: " + str(e)
+
+    chunks = re.split(r"\n\s*\n", raw.strip())
+    new_data = {}
+
+    total = 0
+    reclassified = 0
+
+    for chunk in chunks:
+        lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+        if not lines:
+            continue
+
+        # أول سطر = منصة
+        first = lines[0]
+        if not (first.startswith("[") and first.endswith("]")):
+            continue
+        platform = first[1:-1].strip()
+        if not platform:
+            continue
+
+        if platform not in new_data:
+            new_data[platform] = {}
+
+        for line in lines[1:]:
+            # تجاهل أسطر الدول
+            if line.startswith("[") and line.endswith("]"):
+                continue
+
+            # رقم
+            n = line.replace(" ", "").replace("-", "")
+            if not n.startswith("+"):
+                if n and n[0].isdigit():
+                    n = "+" + n
+                else:
+                    continue
+
+            total += 1
+
+            # تحديد الدولة من COUNTRIES
+            code, country = detect_country(n)
+            if code:
+                name = country["ar"]
+            else:
+                name = "دول أخرى"
+
+            if name not in new_data[platform]:
+                new_data[platform][name] = []
+            if n not in new_data[platform][name]:
+                new_data[platform][name].append(n)
+
+    # اكتب الملف من جديد
+    lines_out = []
+    for plat, countries in new_data.items():
+        lines_out.append("[" + plat + "]")
+        for country, nums in countries.items():
+            lines_out.append("[" + country + "]")
+            for n in nums:
+                lines_out.append(n)
+        lines_out.append("")
+
+    try:
+        # نسخة احتياطية
+        import time
+        import shutil
+        backup = file_path + ".before_reclass_" + str(int(time.time()))
+        shutil.copy2(file_path, backup)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines_out))
+        return True, "تم إعادة التصنيف: " + str(total) + " رقم"
+    except Exception as e:
+        return False, "write err: " + str(e)
+
+
+def reclassify_now():
+    """يحسب عدد الأرقام المصنفة كـ 'دول أخرى' قبل الإصلاح"""
+    try:
+        with open(NUMBERS_FILE, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except Exception:
+        return 0
+    count = 0
+    current_country = None
+    for line in raw.split("\n"):
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current_country = line[1:-1].strip()
+        elif line.startswith("+"):
+            if current_country == "دول أخرى":
+                count += 1
+    return count
 
 
 if __name__ == "__main__":
