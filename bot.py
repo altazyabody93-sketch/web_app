@@ -3,7 +3,6 @@
 # الجزء 1: الاستيرادات + البيانات + الدوال
 # ============================================================
 import os, json, random, string, time
-import country_utils
 import sqlite3
 import re
 
@@ -16496,7 +16495,7 @@ def admin_countries():
     msg = request.args.get("msg", "")
     msg_type = request.args.get("type", "ok")
     try:
-        countries = country_utils.list_all_countries()
+        countries = _country_utils.list_all_countries()
     except Exception as e:
         countries = []
         msg = "خطأ في القراءة: " + str(e)
@@ -16525,7 +16524,7 @@ def admin_countries_add():
         code = "+" + code
 
     try:
-        ok, msg = country_utils.add_country_to_dict(code, name_ar, flag_svg)
+        ok, msg = _country_utils.add_country_to_dict(code, name_ar, flag_svg)
     except Exception as e:
         ok, msg = False, "استثناء: " + str(e)
 
@@ -16541,7 +16540,7 @@ def admin_countries_delete(code):
     """حذف دولة"""
     code = "+" + code
     try:
-        ok, msg = country_utils.delete_country_from_dict(code)
+        ok, msg = _country_utils.delete_country_from_dict(code)
     except Exception as e:
         ok, msg = False, "استثناء: " + str(e)
 
@@ -16549,6 +16548,156 @@ def admin_countries_delete(code):
         return redirect("/admin/countries?msg=" + msg + " — أعد تشغيل السيرفر&type=ok")
     else:
         return redirect("/admin/countries?msg=" + msg + "&type=err")
+
+
+# ============================================================
+# COUNTRY UTILS - مدمجة داخل bot.py
+# ============================================================
+class _country_utils:
+    """غلاف لتغليف دوال إدارة الدول"""
+
+    @staticmethod
+    def add_country_to_dict(code, name_ar, flag_svg, file_path="bot.py"):
+        import re
+        import ast
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return False, "read err: " + str(e)
+
+        check_pattern = '"' + code + '":'
+        if check_pattern in content:
+            return False, "الكود موجود مسبقاً: " + code
+
+        start = content.find("COUNTRIES = {")
+        if start == -1:
+            return False, "لم أجد COUNTRIES"
+
+        lines = content[start:].split(chr(10))
+        end_offset = 0
+        for i, line in enumerate(lines):
+            if i == 0:
+                continue
+            if line.strip() == "}":
+                end_offset = len(chr(10).join(lines[:i])) + 1
+                break
+        if end_offset == 0:
+            return False, "لم أجد نهاية COUNTRIES"
+
+        end = start + end_offset
+        block = content[start:end].rstrip()
+        if not block.endswith(","):
+            block += ","
+
+        flag_clean = flag_svg.replace(chr(10), " ").replace(chr(13), " ").strip()
+        new_line = '    "' + code + '": {"ar": "' + name_ar + '", "flag": \'' + flag_clean + '\'}'
+        new_block = block + chr(10) + new_line + chr(10)
+        new_content = content[:start] + new_block + content[end:]
+
+        try:
+            ast.parse(new_content)
+        except SyntaxError as e:
+            return False, "syntax err: " + str(e)
+
+        try:
+            import time
+            import shutil
+            backup = file_path + ".before_add_" + str(int(time.time()))
+            shutil.copy2(file_path, backup)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            return True, "تمت الإضافة: " + code + " - " + name_ar
+        except Exception as e:
+            return False, "write err: " + str(e)
+
+    @staticmethod
+    def delete_country_from_dict(code, file_path="bot.py"):
+        import re
+        import ast
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return False, "read err: " + str(e)
+
+        pattern = r'    "' + re.escape(code) + r'":\s*\{[^\n]*\},?\n'
+        if not re.search(pattern, content):
+            return False, "لم أجد الدولة: " + code
+
+        new_content = re.sub(pattern, "", content, count=1)
+
+        try:
+            ast.parse(new_content)
+        except SyntaxError as e:
+            return False, "syntax err: " + str(e)
+
+        try:
+            import time
+            import shutil
+            backup = file_path + ".before_del_" + str(int(time.time()))
+            shutil.copy2(file_path, backup)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            return True, "تم الحذف: " + code
+        except Exception as e:
+            return False, "write err: " + str(e)
+
+    @staticmethod
+    def list_all_countries(file_path="bot.py"):
+        import re
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            return []
+
+        start = content.find("COUNTRIES = {")
+        if start == -1:
+            return []
+
+        lines = content[start:].split(chr(10))
+        end_offset = 0
+        for i, line in enumerate(lines):
+            if i == 0:
+                continue
+            if line.strip() == "}":
+                end_offset = len(chr(10).join(lines[:i])) + 1
+                break
+
+        if end_offset == 0:
+            return []
+
+        block = content[start:start + end_offset]
+        result = []
+
+        for line in block.split(chr(10)):
+            line = line.strip()
+            if not line.startswith('"'):
+                continue
+            if '{"ar"' not in line:
+                continue
+
+            m1 = re.match(r'"(\+[0-9]+)":', line)
+            if not m1:
+                continue
+            code = m1.group(1)
+
+            m2 = re.search(r'"ar":\s*"([^"]+)"', line)
+            if not m2:
+                continue
+            name_ar = m2.group(1)
+
+            m3 = re.search(r'"flag":\s*\'(.*)\'\s*\}?\s*,?\s*$', line)
+            flag = m3.group(1) if m3 else ""
+
+            result.append({
+                "code": code,
+                "ar": name_ar,
+                "flag": flag
+            })
+
+        return result
 
 
 if __name__ == "__main__":
