@@ -3,6 +3,7 @@
 # الجزء 1: الاستيرادات + البيانات + الدوال
 # ============================================================
 import os, json, random, string, time
+import country_utils
 import sqlite3
 import re
 
@@ -1810,7 +1811,8 @@ COUNTRIES = {
     "+998": {"ar": "أوزبكستان", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#0099B5"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#1EB53A"/></svg>'},
     "+58": {"ar": "فنزويلا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#FFCC00"/><rect y="0.67" width="3" height="0.67" fill="#00247D"/><rect y="1.33" width="3" height="0.67" fill="#CF142B"/></svg>'},
     "+84": {"ar": "فيتنام", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="2" fill="#DA251D"/><path d="M1.5,0.5 L1.65,1 L2.15,1 L1.75,1.3 L1.9,1.8 L1.5,1.5 L1.1,1.8 L1.25,1.3 L0.85,1 L1.35,1 Z" fill="#FFCD00"/></svg>'},
-    "+967": {"ar": "اليمن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/></svg>'}
+    "+967": {"ar": "اليمن", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="0.67" fill="#CE1126"/><rect y="0.67" width="3" height="0.67" fill="#fff"/><rect y="1.33" width="3" height="0.67" fill="#000"/></svg>'},
+    "+256": {"ar": "أوغندا", "flag": '<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#000"/><rect y="1" width="3" height="1" fill="#FCDC04"/><rect y="2" width="3" height="1" fill="#D90000"/><circle cx="1.5" cy="1.5" r="0.4" fill="#fff"/></svg>'}
 }
 
 # ============================================================
@@ -2368,11 +2370,10 @@ def apis_test_all():
 
 
 def _process_codes_from_api(api, codes):
-    """يعالج أكواد لوحة واحدة: يخزن + Push"""
+    """يحفظ أكواد اللوحة في codes.json مباشرة"""
     if not codes:
         return 0
 
-    smart = bool(api.get("smart_bind", 1))
     auto_push = bool(api.get("auto_push", 1))
     api_name = api.get("name", "")
     new_count = 0
@@ -2381,79 +2382,71 @@ def _process_codes_from_api(api, codes):
         if not isinstance(item, dict):
             continue
 
-        # مفتاح فريد
-        cid = str(item.get("id") or item.get("otp_code") or item.get("code") or
-                  json.dumps({k: item.get(k) for k in ("phone_number","otp_code") if k in item}, sort_keys=True))
-        cid = "api" + str(api.get("id", 0)) + "_" + cid
+        phone = (item.get("phone_number") or item.get("phone") or
+                 item.get("number") or item.get("to") or "").strip()
+        code_val = (item.get("otp_code") or item.get("code") or
+                    item.get("otp") or "").strip()
+        app_name = (item.get("app_name") or item.get("service") or
+                    item.get("app") or "").strip()
+        country = (item.get("country") or "").strip()
+        msg_text = (item.get("message_text") or item.get("message") or "").strip()
+        ext_id = str(item.get("id") or "")
 
+        if not phone or not code_val:
+            print("[API-" + str(api_name) + "] SKIP: phone=" + repr(phone) + " code=" + repr(code_val))
+            continue
+
+        cid = "api" + str(api.get("id", 0)) + "_" + ext_id if ext_id else "api" + str(api.get("id", 0)) + "_" + code_val + "_" + phone[-5:]
         if cid in _external_api_seen:
             continue
         _external_api_seen.add(cid)
-        new_count += 1
 
-        # الربط الذكي
-        if smart:
-            bind = smart_bind_code(item)
-        else:
-            bind = {
-                "phone": str(item.get("phone_number") or item.get("phone") or ""),
-                "code": str(item.get("otp_code") or item.get("code") or ""),
-                "brand": str(item.get("app_name") or ""),
-                "platform": "غير مصنّف",
-                "country": "",
-                "message": str(item.get("message_text") or ""),
-                "source": "external_api",
-                "bound_by": "none"
-            }
+        platform = BRAND_TO_PLATFORM.get(app_name.upper() if app_name else "", app_name or "غير معروف")
 
-        if not bind["phone"] or not bind["code"]:
-            continue
-
-        # خزنه في codes.json
         try:
             codes_list = load_codes()
             now = time.time()
             exists = False
             for c in codes_list:
-                if (c.get("phone") == bind["phone"]
-                    and c.get("code") == bind["code"]
-                    and (now - c.get("timestamp", 0)) < 300):
+                if c.get("phone") == phone and c.get("code") == code_val and (now - c.get("timestamp", 0)) < 600:
                     exists = True
                     break
+
             if not exists:
+                import random as _r
+                import string as _s
                 new_code = {
-                    "id": "C" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10)),
-                    "phone": bind["phone"],
-                    "code": bind["code"],
-                    "platform": bind["platform"],
-                    "country": bind["country"],
-                    "brand": bind["brand"],
-                    "source": "api:" + api_name,
-                    "bound_by": bind["bound_by"],
-                    "message": bind["message"][:200],
+                    "id": "C" + "".join(_r.choices(_s.ascii_uppercase + _s.digits, k=10)),
+                    "phone": phone,
+                    "code": code_val,
+                    "platform": platform,
+                    "country": country,
+                    "brand": app_name,
+                    "source": "api:" + str(api_name),
+                    "bound_by": "direct",
+                    "message": msg_text[:200],
                     "timestamp": now
                 }
                 codes_list.append(new_code)
                 if len(codes_list) > 500:
                     codes_list = codes_list[-500:]
                 save_codes(codes_list)
-                print(f"[API-{api_name}] {bind['platform']} | {bind['phone'][-5:]} | {bind['code']} | via={bind['bound_by']}")
+                new_count += 1
+                print("[API-" + str(api_name) + "] SAVED: " + str(platform) + " | " + str(phone) + " | " + str(code_val))
         except Exception as _e:
             print("[API] save err:", _e)
 
-        # Push
         if auto_push:
             try:
                 send_push_to_all(
-                    title="كود جديد — " + (bind["platform"] or api_name),
-                    body="الرقم: " + bind["phone"][-5:] + "\nالكود: " + bind["code"],
+                    title="كود جديد - " + platform,
+                    body="الرقم: " + phone[-5:] + "\nالكود: " + code_val,
                     url="/"
                 )
             except Exception:
                 pass
 
     return new_count
-
 
 def external_api_poll():
     """Poller متعدد — يقرأ كل اللوحات المفعّلة من DB"""
@@ -4040,10 +4033,10 @@ async function _refreshTree(){
     } catch(e){}
 }
 
-function renderPlatforms(){
-    // حدّث TREE في الخلفية — بدون انتظار
-    _refreshTree();
+async function renderPlatforms(){
     const list = document.getElementById('platformsList');
+    // انتظر تحديث TREE أولاً
+    try { await _refreshTree(); } catch(e){}
     const platforms = Object.keys(TREE);
     if(platforms.length === 0){ list.innerHTML = '<div class="empty">' + t('no_data') + '</div>'; showPage('platforms'); return; }
     let html = '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%">';
@@ -7021,6 +7014,10 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 <svg viewBox="0 0 24 24" width="20" height="20" style="fill:#fff;flex-shrink:0"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
 <span>نسخ احتياطي</span>
 </a>
+<a href="/admin/countries" class="lnk" style="background:linear-gradient(135deg,#00d4a5,#00b894);border-color:transparent;color:#fff">
+<svg viewBox="0 0 24 24" width="20" height="20" style="fill:#fff;flex-shrink:0"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+<span>إدارة الدول</span>
+</a>
 <a href="/admin/users" class="lnk">
 <svg viewBox="0 0 24 24" width="20" height="20" style="fill:#00d4ff;flex-shrink:0"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
 <span>المستخدمون</span>
@@ -9800,6 +9797,8 @@ def api_check_otp(phone):
             set_current_platform(p)
     except Exception:
         pass
+
+    # 1. ابحث في أكواد تيليجرام (الذاكرة)
     tg_entry = find_telegram_code(phone)
     if tg_entry:
         return jsonify({
@@ -9809,7 +9808,48 @@ def api_check_otp(phone):
             "source": "telegram",
             "status": "received"
         })
-    # لا يوجد كود وهمي — فقط من تيليجرام
+
+    # 2. ابحث في codes.json (أكواد اللوحات الخارجية)
+    try:
+        clean = phone.replace(" ", "").replace("+", "").replace("-", "")
+        last4 = clean[-4:] if len(clean) >= 4 else clean
+        last5 = clean[-5:] if len(clean) >= 5 else clean
+        last7 = clean[-7:] if len(clean) >= 7 else clean
+
+        codes = load_codes()
+        now = time.time()
+        for c in reversed(codes):
+            c_phone = (c.get("phone") or "").replace(" ", "").replace("+", "").replace("-", "")
+            if not c_phone:
+                continue
+            # مطابقة ذكية: آخر 5 أو 7 أو 4 أرقام
+            match = False
+            if c_phone == clean:
+                match = True
+            elif len(c_phone) >= 5 and len(clean) >= 5 and c_phone[-5:] == last5:
+                match = True
+            elif len(c_phone) >= 7 and len(clean) >= 7 and c_phone[-7:] == last7:
+                match = True
+            elif c_phone.endswith(last5) or last5.endswith(c_phone[-5:] if len(c_phone) >= 5 else c_phone):
+                match = True
+
+            if match:
+                # تحقق من صلاحية الوقت (آخر 15 دقيقة)
+                age = now - c.get("timestamp", 0)
+                if age < 900:
+                    return jsonify({
+                        "phone": phone,
+                        "code": c.get("code"),
+                        "brand": c.get("brand", ""),
+                        "platform": c.get("platform", ""),
+                        "source": c.get("source", "api"),
+                        "status": "received",
+                        "age_sec": int(age)
+                    })
+    except Exception as e:
+        print("[API-CHECK-OTP] codes.json err:", e)
+
+    # 3. لا يوجد كود
     return jsonify({
         "phone": phone,
         "code": None,
@@ -16330,6 +16370,185 @@ def admin_custom_save():
     save_settings(s)
     print("[CUSTOM] saved colors and texts")
     return redirect(url_for("admin_panel"))
+
+
+# ============================================================
+# ADMIN COUNTRIES — إدارة الدول
+# ============================================================
+COUNTRIES_ADMIN_HTML = r"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>إدارة الدول</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',Tahoma,sans-serif;-webkit-tap-highlight-color:transparent}
+body{background:#07070d;color:#e8e8f0;min-height:100vh;padding:0 0 40px;direction:rtl}
+.hdr{position:sticky;top:0;z-index:100;background:linear-gradient(135deg,#0c0c18,#12122a);border-bottom:1px solid rgba(123,47,247,.25);padding:16px 18px;display:flex;align-items:center;gap:14px;box-shadow:0 4px 24px rgba(0,0,0,.4)}
+.hdr .back{padding:10px 14px;background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.3);color:#00d4ff;border-radius:12px;font-size:12px;font-weight:700;text-decoration:none;flex-shrink:0}
+.hdr h1{font-size:19px;font-weight:900;background:linear-gradient(135deg,#7b2ff7,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;flex:1}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;padding:14px 18px}
+.stat{background:linear-gradient(160deg,#10101e,#0a0a14);border:1px solid rgba(123,47,247,.2);border-radius:14px;padding:12px 8px;text-align:center}
+.stat b{font-size:22px;font-weight:900;display:block;color:#00d4ff}
+.stat span{font-size:10px;color:#6e6e8a}
+.wrap{padding:0 18px}
+.add-box{background:linear-gradient(160deg,#10101e,#0a0a14);border:1px solid rgba(123,47,247,.25);border-radius:18px;padding:18px;margin-bottom:18px}
+.add-box h2{font-size:14px;color:#00d4ff;margin-bottom:14px;font-weight:800}
+label{display:block;font-size:12px;color:#8e8eab;margin:12px 0 6px;font-weight:600}
+label:first-of-type{margin-top:0}
+input,textarea{width:100%;padding:12px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(0,0,0,.35);color:#e8e8f0;font-size:14px;outline:none;font-family:inherit}
+input:focus,textarea:focus{border-color:#7b2ff7}
+textarea{font-family:monospace;font-size:11px;direction:ltr;text-align:left;resize:vertical;min-height:80px}
+.btn{width:100%;padding:14px;border:none;border-radius:13px;color:#fff;cursor:pointer;font-weight:800;font-size:14px;font-family:inherit;margin-top:14px}
+.btn-grad{background:linear-gradient(135deg,#7b2ff7,#00d4ff);box-shadow:0 6px 20px rgba(123,47,247,.4)}
+.btn:active{transform:scale(.97)}
+.msg{padding:12px 14px;border-radius:12px;font-size:13px;text-align:center;margin-bottom:14px;font-weight:700}
+.msg.ok{background:rgba(0,184,148,.15);border:1px solid rgba(0,184,148,.35);color:#6fe3c1}
+.msg.err{background:rgba(233,69,96,.15);border:1px solid rgba(233,69,96,.4);color:#ff8aa3}
+.search-box{padding:0 18px 12px}
+.search-box input{width:100%;padding:13px 16px;border:1px solid rgba(123,47,247,.25);border-radius:14px;background:rgba(0,0,0,.4);color:#fff;font-size:14px;outline:none}
+.search-box input:focus{border-color:#00d4ff}
+.list{padding:0 18px}
+.country-card{background:linear-gradient(160deg,#10101e,#0a0a14);border:1px solid rgba(123,47,247,.18);border-radius:14px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px}
+.country-card .flag-box{width:44px;height:32px;border-radius:6px;overflow:hidden;flex-shrink:0;background:#000;display:flex;align-items:center;justify-content:center}
+.country-card .flag-box svg{width:100%;height:100%;display:block}
+.country-card .info{flex:1;min-width:0}
+.country-card .code{font-size:13px;font-family:monospace;color:#00d4ff;direction:ltr;text-align:left;font-weight:800;margin-bottom:2px}
+.country-card .name{font-size:14px;font-weight:700;color:#fff}
+.country-card .del{width:36px;height:36px;border:none;background:rgba(233,69,96,.15);color:#ff6b8a;border-radius:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;cursor:pointer;font-weight:900}
+.country-card .del:active{background:rgba(233,69,96,.35)}
+.empty{text-align:center;padding:40px 20px;color:#6e6e8a;font-size:13px}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+<a href="/admin" class="back">← الأدمن</a>
+<h1>إدارة الدول</h1>
+</div>
+
+{% if msg %}
+<div style="padding:0 18px"><div class="msg {{ msg_type }}">{{ msg }}</div></div>
+{% endif %}
+
+<div class="stats">
+<div class="stat"><b>{{ total }}</b><span>إجمالي الدول</span></div>
+<div class="stat"><b>{{ countries|length }}</b><span>ظاهرة في القائمة</span></div>
+</div>
+
+<div class="wrap">
+<div class="add-box">
+<h2>إضافة دولة جديدة</h2>
+<form method="POST" action="/admin/countries/add">
+<label>كود الدولة (مثل +256)</label>
+<input type="text" name="code" placeholder="+256" required pattern="\+[0-9]{1,4}" style="font-family:monospace;direction:ltr;text-align:left">
+
+<label>اسم الدولة بالعربي</label>
+<input type="text" name="name_ar" placeholder="أوغندا" required>
+
+<label>علم الدولة SVG</label>
+<textarea name="flag_svg" placeholder='<svg viewBox="0 0 3 2" width="24" height="16"><rect width="3" height="1" fill="#000"/><rect y="1" width="3" height="1" fill="#FCDC04"/><rect y="2" width="3" height="1" fill="#D90000"/><circle cx="1.5" cy="1.5" r="0.4" fill="#fff"/></svg>' required></textarea>
+
+<button type="submit" class="btn btn-grad">إضافة الدولة</button>
+</form>
+</div>
+</div>
+
+<div class="search-box">
+<input type="text" id="searchBox" placeholder="ابحث عن دولة..." oninput="filterCountries(this.value)">
+</div>
+
+<div class="list" id="countriesList">
+{% if countries %}
+{% for c in countries %}
+<div class="country-card" data-search="{{ c.code }} {{ c.ar }}">
+<div class="flag-box">{{ c.flag|safe }}</div>
+<div class="info">
+<div class="code">{{ c.code }}</div>
+<div class="name">{{ c.ar }}</div>
+</div>
+<a href="/admin/countries/delete/{{ c.code|replace('+','') }}" class="del" onclick="return confirm('حذف {{ c.ar }}؟')">×</a>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty">لا توجد دول</div>
+{% endif %}
+</div>
+
+<script>
+function filterCountries(q){
+    q = q.trim().toLowerCase();
+    document.querySelectorAll('.country-card').forEach(function(c){
+        var s = c.dataset.search.toLowerCase();
+        c.style.display = (!q || s.indexOf(q) > -1) ? 'flex' : 'none';
+    });
+}
+</script>
+
+</body>
+</html>"""
+
+
+@app.route("/admin/countries")
+@admin_required
+def admin_countries():
+    """صفحة إدارة الدول"""
+    msg = request.args.get("msg", "")
+    msg_type = request.args.get("type", "ok")
+    try:
+        countries = country_utils.list_all_countries()
+    except Exception as e:
+        countries = []
+        msg = "خطأ في القراءة: " + str(e)
+        msg_type = "err"
+    return render_template_string(
+        COUNTRIES_ADMIN_HTML,
+        countries=countries,
+        total=len(countries),
+        msg=msg,
+        msg_type=msg_type
+    )
+
+
+@app.route("/admin/countries/add", methods=["POST"])
+@admin_required
+def admin_countries_add():
+    """إضافة دولة جديدة"""
+    code = request.form.get("code", "").strip()
+    name_ar = request.form.get("name_ar", "").strip()
+    flag_svg = request.form.get("flag_svg", "").strip()
+
+    if not code or not name_ar or not flag_svg:
+        return redirect("/admin/countries?msg=" + "كل الحقول مطلوبة&type=err")
+
+    if not code.startswith("+"):
+        code = "+" + code
+
+    try:
+        ok, msg = country_utils.add_country_to_dict(code, name_ar, flag_svg)
+    except Exception as e:
+        ok, msg = False, "استثناء: " + str(e)
+
+    if ok:
+        return redirect("/admin/countries?msg=" + msg + " — أعد تشغيل السيرفر لتفعيلها&type=ok")
+    else:
+        return redirect("/admin/countries?msg=" + msg + "&type=err")
+
+
+@app.route("/admin/countries/delete/<code>")
+@admin_required
+def admin_countries_delete(code):
+    """حذف دولة"""
+    code = "+" + code
+    try:
+        ok, msg = country_utils.delete_country_from_dict(code)
+    except Exception as e:
+        ok, msg = False, "استثناء: " + str(e)
+
+    if ok:
+        return redirect("/admin/countries?msg=" + msg + " — أعد تشغيل السيرفر&type=ok")
+    else:
+        return redirect("/admin/countries?msg=" + msg + "&type=err")
 
 
 if __name__ == "__main__":
