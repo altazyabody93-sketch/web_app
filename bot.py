@@ -728,6 +728,61 @@ def db_init():
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_apis_enabled ON external_apis(enabled)")
 
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN custom_headers TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN custom_query TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_method TEXT DEFAULT 'GET'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN json_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_phone TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_code TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_platform TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_country TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_message TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN body_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -735,125 +790,23 @@ def load_users():
     """يرجع كل المستخدمين من DB"""
 
 
-    # custom_headers — هيدرز مخصصة (JSON)
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN custom_headers TEXT DEFAULT '[]'")
-    except sqlite3.OperationalError:
-        pass
 
-    # custom_query — query params مخصصة (JSON)
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN custom_query TEXT DEFAULT '[]'")
-    except sqlite3.OperationalError:
-        pass
 
-    # api_path — مسار الأكواد المخصص
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN api_path TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # api_method — طريقة الطلب (GET/POST)
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN api_method TEXT DEFAULT 'GET'")
-    except sqlite3.OperationalError:
-        pass
 
-    # json_path — مسار الأكواد داخل JSON
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN json_path TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_phone — اسم حقل الرقم
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_phone TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_code — اسم حقل الكود
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_code TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_platform — اسم حقل المنصة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_platform TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_country — اسم حقل الدولة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_country TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_message — اسم حقل الرسالة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_message TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # body_json — body مخصص للـ POST
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN body_json TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # api_path — مسار الأكواد المخصص
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN api_path TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # api_method — طريقة الطلب (GET/POST)
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN api_method TEXT DEFAULT 'GET'")
-    except sqlite3.OperationalError:
-        pass
 
-    # json_path — مسار الأكواد داخل JSON
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN json_path TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_phone — اسم حقل الرقم
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_phone TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_code — اسم حقل الكود
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_code TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_platform — اسم حقل المنصة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_platform TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
 
-    # field_country — اسم حقل الدولة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_country TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-
-    # field_message — اسم حقل الرسالة
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN field_message TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-
-    # body_json — body مخصص للـ POST
-    try:
-        c.execute("ALTER TABLE external_apis ADD COLUMN body_json TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
     try:
         conn = _db()
         rows = conn.execute("SELECT * FROM users").fetchall()
