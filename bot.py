@@ -451,7 +451,11 @@ def apis_get(aid):
         return None
 
 def apis_add(name, url, token="", username="", password="", auth_type="token",
-             enabled=1, smart_bind=1, auto_push=1, interval_sec=60):
+             enabled=1, smart_bind=1, auto_push=1, interval_sec=60,
+             custom_headers="[]", custom_query="[]",
+             api_path="", api_method="GET", json_path="",
+             field_phone="", field_code="", field_platform="",
+             field_country="", field_message="", body_json=""):
     """يضيف لوحة جديدة"""
     try:
         conn = _db()
@@ -459,12 +463,22 @@ def apis_add(name, url, token="", username="", password="", auth_type="token",
         c.execute("""
             INSERT INTO external_apis
             (name, url, token, username, password, auth_type, enabled,
-             smart_bind, auto_push, interval_sec, last_status, created, updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+             smart_bind, auto_push, interval_sec, custom_headers, custom_query,
+             api_path, api_method, json_path,
+             field_phone, field_code, field_platform,
+             field_country, field_message, body_json,
+             last_status, created, updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
         """, (name.strip(), url.strip().rstrip('/'), token.strip(),
               username.strip(), password, auth_type.strip(),
               int(enabled), int(smart_bind), int(auto_push),
-              int(interval_sec), time.time(), time.time()))
+              int(interval_sec), str(custom_headers or "[]"), str(custom_query or "[]"),
+              str(api_path or "").strip(), str(api_method or "GET").strip().upper(),
+              str(json_path or "").strip(),
+              str(field_phone or "").strip(), str(field_code or "").strip(),
+              str(field_platform or "").strip(), str(field_country or "").strip(),
+              str(field_message or "").strip(), str(body_json or "").strip(),
+              time.time(), time.time()))
         aid = c.lastrowid
         conn.commit()
         conn.close()
@@ -478,7 +492,11 @@ def apis_update(aid, **fields):
     """يحدّث حقول لوحة"""
     allowed = {"name","url","token","username","password","auth_type",
                "enabled","smart_bind","auto_push","interval_sec",
-               "last_fetch","last_count","last_status","last_error"}
+               "last_fetch","last_count","last_status","last_error",
+               "custom_headers","custom_query",
+               "api_path","api_method","json_path",
+               "field_phone","field_code","field_platform",
+               "field_country","field_message","body_json"}
     sets = []
     vals = []
     for k, v in fields.items():
@@ -715,6 +733,127 @@ def db_init():
 
 def load_users():
     """يرجع كل المستخدمين من DB"""
+
+
+    # custom_headers — هيدرز مخصصة (JSON)
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN custom_headers TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass
+
+    # custom_query — query params مخصصة (JSON)
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN custom_query TEXT DEFAULT '[]'")
+    except sqlite3.OperationalError:
+        pass
+
+    # api_path — مسار الأكواد المخصص
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # api_method — طريقة الطلب (GET/POST)
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_method TEXT DEFAULT 'GET'")
+    except sqlite3.OperationalError:
+        pass
+
+    # json_path — مسار الأكواد داخل JSON
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN json_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_phone — اسم حقل الرقم
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_phone TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_code — اسم حقل الكود
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_code TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_platform — اسم حقل المنصة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_platform TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_country — اسم حقل الدولة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_country TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_message — اسم حقل الرسالة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_message TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # body_json — body مخصص للـ POST
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN body_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # api_path — مسار الأكواد المخصص
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # api_method — طريقة الطلب (GET/POST)
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN api_method TEXT DEFAULT 'GET'")
+    except sqlite3.OperationalError:
+        pass
+
+    # json_path — مسار الأكواد داخل JSON
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN json_path TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_phone — اسم حقل الرقم
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_phone TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_code — اسم حقل الكود
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_code TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_platform — اسم حقل المنصة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_platform TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_country — اسم حقل الدولة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_country TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # field_message — اسم حقل الرسالة
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN field_message TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # body_json — body مخصص للـ POST
+    try:
+        c.execute("ALTER TABLE external_apis ADD COLUMN body_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn = _db()
         rows = conn.execute("SELECT * FROM users").fetchall()
@@ -1849,7 +1988,12 @@ def load_codes():
             return []
     return []
 
+MAX_CODES = 2000
+
 def save_codes(codes):
+    # اقلم: احتفظ بآخر MAX_CODES فقط
+    if isinstance(codes, list) and len(codes) > MAX_CODES:
+        codes = codes[-MAX_CODES:]
     with open(CODES_FILE, "w", encoding="utf-8") as f:
         json.dump(codes, f, ensure_ascii=False, indent=2)
 
@@ -1870,8 +2014,8 @@ def add_code(phone, code, platform="", country="", brand="", source=""):
         "timestamp": now
     }
     codes.append(new_code)
-    if len(codes) > 500:
-        codes = codes[-500:]
+    if len(codes) > MAX_CODES:
+        codes = codes[-MAX_CODES:]
     save_codes(codes)
     return new_code
 
@@ -2188,7 +2332,7 @@ def smart_bind_code(item):
 
 
 def _api_build_headers(api):
-    """يبني headers حسب نوع المصادقة"""
+    """يبني headers حسب نوع المصادقة (يدعم: token, basic, both, none, custom)"""
     h = {"Accept": "application/json"}
     auth = (api.get("auth_type") or "token").lower()
     token = (api.get("token") or "").strip()
@@ -2209,7 +2353,76 @@ def _api_build_headers(api):
             import base64 as _b64
             creds = (username + ":" + password).encode("utf-8")
             h["Authorization"] = "Basic " + _b64.b64encode(creds).decode()
+    elif auth == "custom":
+        # دمج الهيدرز المخصصة
+        custom = _api_build_custom_headers(api)
+        h.update(custom)
     return h
+
+
+def _api_build_custom_headers(api):
+    """يبني هيدرز مخصصة من حقل custom_headers (JSON)"""
+    h = {"Accept": "application/json"}
+    custom = api.get("custom_headers") or "[]"
+    try:
+        items = json.loads(custom) if isinstance(custom, str) else custom
+    except Exception:
+        items = []
+    if not isinstance(items, list):
+        return h
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        value = str(item.get("value") or "")
+        if not name:
+            continue
+        # استبدل {time} بالوقت الحالي
+        if "{time}" in value:
+            value = value.replace("{time}", str(int(time.time())))
+        # استبدل {timestamp} بالوقت بالميلي ثانية
+        if "{timestamp}" in value:
+            value = value.replace("{timestamp}", str(int(time.time() * 1000)))
+        # استبدل {uuid} بـ UUID عشوائي
+        if "{uuid}" in value:
+            import uuid as _u
+            value = value.replace("{uuid}", _u.uuid4().hex)
+        h[name] = value
+    return h
+
+
+def _api_build_query_params(api):
+    """يبني query params مخصصة من حقل custom_query (JSON)"""
+    params = []
+    custom = api.get("custom_query") or "[]"
+    try:
+        items = json.loads(custom) if isinstance(custom, str) else custom
+    except Exception:
+        items = []
+    if not isinstance(items, list):
+        return params
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        value = str(item.get("value") or "")
+        if not name:
+            continue
+        if "{time}" in value:
+            value = value.replace("{time}", str(int(time.time())))
+        params.append((name, value))
+    return params
+
+
+def _api_add_query_to_url(url, params):
+    """يضيف query params لرابط"""
+    if not params:
+        return url
+    from urllib.parse import urlencode as _ue
+    sep = "&" if "?" in url else "?"
+    return url + sep + _ue(params)
+
+
 
 
 def _api_fetch_account(api):
@@ -2256,9 +2469,12 @@ def _api_fetch_balance(api):
 
 
 def _api_fetch_one(api, limit=50):
-    """يجلب أكواد من لوحة واحدة — يرجع (ok, codes, error)"""
+    """يجلب أكواد من لوحة واحدة — يدعم كل التخصيصات
+    Returns: (ok, codes, error)
+    """
     import urllib.request as _ur
     import urllib.error as _ue
+    from urllib.parse import urlencode as _urlenc
 
     base = (api.get("url") or "").strip().rstrip('/')
     if not base:
@@ -2266,34 +2482,130 @@ def _api_fetch_one(api, limit=50):
 
     headers = _api_build_headers(api)
 
-    # نجرّب عدة مسارات
-    paths = ["/api/v1/codes", "/api/codes", "/codes"]
+    # ═══ المسار المخصص أو الافتراضي ═══
+    custom_path = (api.get("api_path") or "").strip()
+    if custom_path:
+        if not custom_path.startswith("/"):
+            custom_path = "/" + custom_path
+        paths = [custom_path]
+    else:
+        paths = ["/api/v1/codes", "/api/codes", "/codes"]
+
+    # ═══ الطريقة ═══
+    method = (api.get("api_method") or "GET").strip().upper()
+    if method not in ("GET", "POST"):
+        method = "GET"
+
+    # ═══ Body JSON لو POST ═══
+    body_json = (api.get("body_json") or "").strip()
+    body_data = None
+    if method == "POST":
+        if body_json:
+            try:
+                body_data = json.loads(body_json)
+            except Exception as e:
+                return False, [], "body_json غير صالح: " + str(e)
+        else:
+            body_data = {"limit": limit}
+        # حول لـ bytes
+        body_bytes = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    else:
+        body_bytes = None
+
+    # ═══ Query Params ═══
+    params = []
+    if method == "GET":
+        params.append(("limit", str(limit)))
+        if (api.get("auth_type") or "").lower() == "custom":
+            params.extend(_api_build_query_params(api))
+
     last_err = ""
 
     for path in paths:
         try:
-            req = _ur.Request(
-                base + path + "?limit=" + str(limit),
-                headers=headers
-            )
+            _url = base + path
+            if params:
+                sep = "&" if "?" in _url else "?"
+                _url = _url + sep + _urlenc(params)
+
+            req = _ur.Request(_url, data=body_bytes, headers=headers, method=method)
             with _ur.urlopen(req, timeout=15) as resp:
                 raw = resp.read().decode("utf-8", errors="ignore")
-            data = json.loads(raw)
 
-            codes = []
-            if isinstance(data, list):
-                codes = data
-            elif isinstance(data, dict):
-                codes = data.get("codes") or data.get("data") or data.get("messages") or []
-            return True, codes or [], ""
+            # ═══ parse JSON ═══
+            try:
+                data = json.loads(raw)
+            except Exception:
+                last_err = "رد غير JSON: " + raw[:100]
+                continue
+
+            # ═══ استخرج الأكواد من الاستجابة ═══
+            codes = _extract_codes_from_response(data, api)
+            return True, codes, ""
         except _ue.HTTPError as e:
-            last_err = "HTTP " + str(e.code)
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="ignore")[:100]
+            except Exception:
+                pass
+            last_err = "HTTP " + str(e.code) + (" " + body if body else "")
             continue
         except Exception as e:
             last_err = type(e).__name__ + ": " + str(e)[:120]
             continue
 
     return False, [], last_err
+
+
+def _extract_codes_from_response(data, api=None):
+    """يستخرج قائمة الأكواد من استجابة JSON — يدعم كل الأشكال"""
+    if not data:
+        return []
+
+    # ═══ لو المستخدم حدد json_path يدوياً ═══
+    if api:
+        jp = (api.get("json_path") or "").strip()
+        if jp:
+            parts = [p.strip() for p in jp.split(".") if p.strip()]
+            node = data
+            for p in parts:
+                if isinstance(node, dict) and p in node:
+                    node = node[p]
+                elif isinstance(node, list) and p.isdigit() and int(p) < len(node):
+                    node = node[int(p)]
+                else:
+                    node = None
+                    break
+            if isinstance(node, list):
+                return node
+            if isinstance(node, dict):
+                return [node]
+
+    # ═══ لو data قائمة مباشرة ═══
+    if isinstance(data, list):
+        return data
+
+    # ═══ ابحث في المفاتيح الشائعة ═══
+    if isinstance(data, dict):
+        for key in ("codes", "data", "messages", "items", "results", "sms", "list", "rows"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+            # data كـ dict → ابحث داخلها
+            if isinstance(val, dict):
+                for k2 in ("items", "list", "data", "codes", "results", "rows"):
+                    v2 = val.get(k2)
+                    if isinstance(v2, list):
+                        return v2
+        # لو data كائن واحد يحتوي كود
+        if any(k in data for k in ("code", "otp", "otp_code")):
+            return [data]
+
+    return []
+
+
+
 
 
 def api_test(aid):
@@ -2370,7 +2682,7 @@ def apis_test_all():
 
 
 def _process_codes_from_api(api, codes):
-    """يحفظ أكواد اللوحة في codes.json مباشرة"""
+    """يحفظ أكواد اللوحة في codes.json — يدعم الحقول المخصصة"""
     if not codes:
         return 0
 
@@ -2378,30 +2690,83 @@ def _process_codes_from_api(api, codes):
     api_name = api.get("name", "")
     new_count = 0
 
+    # ═══ الحقول المخصصة (إن وُجدت) أو الافتراضية ═══
+    fp = (api.get("field_phone") or "").strip() or None
+    fc = (api.get("field_code") or "").strip() or None
+    fpl = (api.get("field_platform") or "").strip() or None
+    fco = (api.get("field_country") or "").strip() or None
+    fm = (api.get("field_message") or "").strip() or None
+
+    # قوائم بأسماء الحقول الشائعة (fallback)
+    phone_keys = [fp] if fp else []
+    phone_keys += ["phone_number", "phone", "number", "to", "mobile", "msisdn", "recipient"]
+    code_keys = [fc] if fc else []
+    code_keys += ["otp_code", "code", "otp", "pin", "verification_code", "sms_code"]
+    platform_keys = [fpl] if fpl else []
+    platform_keys += ["app_name", "service", "app", "platform", "brand", "source", "provider"]
+    country_keys = [fco] if fco else []
+    country_keys += ["country", "country_code", "region"]
+    message_keys = [fm] if fm else []
+    message_keys += ["message_text", "message", "text", "body", "sms", "content"]
+
+    def _find_val(item, keys):
+        for k in keys:
+            if not k:
+                continue
+            v = item.get(k)
+            if v is not None and v != "":
+                return v
+        return ""
+
     for item in codes:
         if not isinstance(item, dict):
             continue
 
-        phone = (item.get("phone_number") or item.get("phone") or
-                 item.get("number") or item.get("to") or "").strip()
-        code_val = (item.get("otp_code") or item.get("code") or
-                    item.get("otp") or "").strip()
-        app_name = (item.get("app_name") or item.get("service") or
-                    item.get("app") or "").strip()
-        country = (item.get("country") or "").strip()
-        msg_text = (item.get("message_text") or item.get("message") or "").strip()
-        ext_id = str(item.get("id") or "")
+        phone = str(_find_val(item, phone_keys) or "").strip()
+        code_val = str(_find_val(item, code_keys) or "").strip()
+        app_name = str(_find_val(item, platform_keys) or "").strip()
+        country = str(_find_val(item, country_keys) or "").strip()
+        msg_text = str(_find_val(item, message_keys) or "").strip()
+        ext_id = str(item.get("id") or item.get("uuid") or item.get("_id") or "")
 
         if not phone or not code_val:
-            print("[API-" + str(api_name) + "] SKIP: phone=" + repr(phone) + " code=" + repr(code_val))
             continue
 
-        cid = "api" + str(api.get("id", 0)) + "_" + ext_id if ext_id else "api" + str(api.get("id", 0)) + "_" + code_val + "_" + phone[-5:]
+        cid = "api" + str(api.get("id", 0)) + "_" + (ext_id if ext_id else code_val + "_" + phone[-5:])
         if cid in _external_api_seen:
             continue
         _external_api_seen.add(cid)
 
-        platform = BRAND_TO_PLATFORM.get(app_name.upper() if app_name else "", app_name or "غير معروف")
+        # تحديد المنصة — الربط الذكي أولاً
+        platform = ""
+        bound_by = "none"
+
+        # 1. حاول الربط الذكي بالرقم في TREE
+        try:
+            p_tree, c_tree = _find_phone_in_tree(phone)
+            if p_tree:
+                platform = p_tree
+                bound_by = "phone"
+                if not country:
+                    country = c_tree
+        except Exception:
+            pass
+
+        # 2. لو ما نجح → ربط بالـ brand
+        if not platform and app_name:
+            p_brand, b_brand = _brand_to_platform(app_name)
+            if p_brand:
+                platform = p_brand
+                bound_by = "brand"
+            else:
+                # استخدم الجدول الثابت
+                platform = BRAND_TO_PLATFORM.get(app_name.upper(), app_name)
+                bound_by = "brand_table"
+
+        # 3. Fallback
+        if not platform:
+            platform = "غير معروف"
+            bound_by = "fallback"
 
         try:
             codes_list = load_codes()
@@ -2423,7 +2788,7 @@ def _process_codes_from_api(api, codes):
                     "country": country,
                     "brand": app_name,
                     "source": "api:" + str(api_name),
-                    "bound_by": "direct",
+                    "bound_by": bound_by,
                     "message": msg_text[:200],
                     "timestamp": now
                 }
@@ -2447,6 +2812,9 @@ def _process_codes_from_api(api, codes):
                 pass
 
     return new_count
+
+
+
 
 
 def external_api_poll():
@@ -7064,10 +7432,7 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
 <span>تخصيص</span>
 </button>
-<button class="tb" onclick="showTab('external',event)">
-<svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15l3.5-4.5 2.5 3.01L14.5 9l4.5 6H5z"/></svg>
-<span>API خارجي</span>
-</button>
+
 <button class="tb" onclick="showTab('preview',event)">
 <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
 <span>معاينة</span>
@@ -7153,112 +7518,6 @@ input:focus,textarea:focus,select:focus{border-color:#7b2ff7}
 </div></div>
 
 <!-- ═══ تبويب External API ═══ -->
-<div class="pane" id="pane-external">
-<div class="card">
-<h2>
-<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#00d4ff;vertical-align:middle;margin-left:6px"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM5 15l3.5-4.5 2.5 3.01L14.5 9l4.5 6H5z"/></svg>
-مصدر API الخارجي
-</h2>
-
-<div class="info-box">اربط موقعك بـ API خارجي لسحب الأكواد تلقائياً — يشتغل كل 10 ثواني.</div>
-
-<form method="POST" action="/admin/external-api/save">
-
-<label>رابط API (Base URL)</label>
-<input type="text" name="external_api_url" value="{{ s.external_api_url or 'http://78.154.103.39:11105' }}" dir="ltr" placeholder="http://example.com:11105" style="font-family:monospace">
-
-<label>API Token</label>
-<input type="text" name="external_api_token" value="{{ s.external_api_token or '' }}" dir="ltr" placeholder="الصق التوكن هنا" style="font-family:monospace">
-
-<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(0,212,255,.08);padding:14px;border-radius:12px;margin-top:16px">
-<input type="checkbox" name="external_api_enabled" {% if s.external_api_enabled %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
-<b style="color:#00d4ff;font-size:14px">تفعيل السحب التلقائي</b>
-</label>
-
-<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(0,212,165,.08);padding:14px;border-radius:12px;margin-top:10px">
-<input type="checkbox" name="external_api_smart_bind" {% if s.external_api_smart_bind %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
-<b style="color:#00d4a5;font-size:14px">🧠 الربط الذكي (ربط الكود بالمنصة تلقائياً)</b>
-</label>
-
-<label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:rgba(251,191,36,.08);padding:14px;border-radius:12px;margin-top:10px">
-<input type="checkbox" name="external_api_auto_push" {% if s.external_api_auto_push %}checked{% endif %} style="width:auto;margin:0;transform:scale(1.5)">
-<b style="color:#fbbf24;font-size:14px">🔔 إرسال Push تلقائي</b>
-</label>
-
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
-<button type="submit" class="btn btn-green" style="margin-top:0">
-<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4z"/></svg>
-حفظ
-</button>
-<button type="button" class="btn btn-orange" style="margin-top:0" onclick="extApiTest()">
-<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-فحص الاتصال
-</button>
-</div>
-
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-<button type="button" class="btn btn-grad" style="margin-top:0" onclick="extApiFetchNow()">
-<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
-سحب يدوي الآن
-</button>
-<button type="button" class="btn btn-grad" style="margin-top:0;background:linear-gradient(135deg,#7b2ff7,#00d4ff)" onclick="extApiStatus()">
-<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#fff;vertical-align:middle;margin-left:6px"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-تحديث الحالة
-</button>
-</div>
-
-<div id="extApiResult" style="margin-top:14px;padding:14px;border-radius:10px;background:rgba(0,0,0,.3);font-size:13px;display:none;white-space:pre-line;direction:ltr;text-align:left;font-family:monospace"></div>
-
-</form>
-</div>
-</div>
-
-<script>
-function extApiTest(){
-    var b = document.getElementById("extApiResult");
-    b.style.display = "block"; b.style.color = "#00d4ff"; b.textContent = "جاري الفحص...";
-    fetch("/admin/external-api/test").then(function(r){return r.json()}).then(function(d){
-        if(d.ok){
-            b.style.color = "#00d4a5";
-            b.textContent = "✅ الاتصال ناجح\nالمسار: " + d.path + "\nالحالة: " + d.status + "\nعدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
-        } else {
-            b.style.color = "#ff6b8a";
-            b.textContent = "❌ فشل: " + (d.error || "غير معروف");
-        }
-    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
-}
-function extApiFetchNow(){
-    var b = document.getElementById("extApiResult");
-    b.style.display = "block"; b.style.color = "#ffcb6b"; b.textContent = "جاري السحب...";
-    fetch("/admin/external-api/fetch-now").then(function(r){return r.json()}).then(function(d){
-        if(d.ok){
-            b.style.color = "#00d4a5";
-            b.textContent = "✅ تم السحب — عدد الأكواد: " + d.count + "\n\nعينة:\n" + d.sample;
-        } else {
-            b.style.color = "#ff6b8a"; b.textContent = "❌ فشل";
-        }
-    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
-}
-function extApiStatus(){
-    var b = document.getElementById("extApiResult");
-    b.style.display = "block"; b.style.color = "#00d4ff"; b.textContent = "جاري التحميل...";
-    fetch("/admin/external-api/status").then(function(r){return r.json()}).then(function(d){
-        b.style.color = "#00d4ff";
-        b.textContent =
-            "📊 حالة API الخارجي\n" +
-            "الرابط: " + d.url + "\n" +
-            "التوكن: " + (d.has_token ? "✓" : "✗") + "\n" +
-            "مفعّل: " + (d.enabled ? "✓" : "✗") + "\n" +
-            "آخر سحب: " + (d.last_fetch ? new Date(d.last_fetch*1000).toLocaleString() : "لا يوجد") + "\n" +
-            "آخر عدد: " + d.last_count + "\n" +
-            "الحالة: " + d.last_status + "\n" +
-            "الخطأ: " + (d.last_error || "لا يوجد") + "\n" +
-            "أكواد في الذاكرة: " + d.codes_in_memory;
-    }).catch(function(e){ b.style.color = "#ff6b8a"; b.textContent = "خطأ: " + e.message; });
-}
-</script>
-
-<!-- ═══ تبويب التخصيص ═══ -->
 <div class="pane" id="pane-custom">
 <style>
 .custom-section{background:linear-gradient(160deg,#10101e,#0a0a14);border:1px solid rgba(123,47,247,.2);border-radius:16px;padding:16px;margin-bottom:14px}
@@ -8048,7 +8307,6 @@ function showTab(n,e){
   var pane = document.getElementById("pane-"+n);
   if(pane) pane.classList.add("active");
   if(n==="telegram") tgRefresh();
-  if(n==="chart"){ setTimeout(loadChart, 100); setTimeout(loadChart, 500); }
   if(n==="preview" && typeof refreshPreview === "function") setTimeout(refreshPreview, 200);
 }
 function tgTest(){
@@ -10341,7 +10599,7 @@ input:focus,select:focus{border-color:#7b2ff7}
 </div>
 <div class="actions">
 <a href="#" class="act test" onclick="return testOne(event, {{ a.id }})">فحص</a>
-<button class="act edit" onclick='showEditModal({{ a.id }}, {{ a.name|tojson }}, {{ a.url|tojson }}, {{ a.token|tojson }}, {{ a.username|tojson }}, {{ a.password|tojson }}, {{ a.auth_type|tojson }}, {{ a.enabled }}, {{ a.smart_bind }}, {{ a.auto_push }}, {{ a.interval_sec }})'>تعديل</button>
+<button class="act edit" onclick='showEditModal({{ a.id }}, {{ a.name|tojson }}, {{ a.url|tojson }}, {{ a.token|tojson }}, {{ a.username|tojson }}, {{ a.password|tojson }}, {{ a.auth_type|tojson }}, {{ a.enabled }}, {{ a.smart_bind }}, {{ a.auto_push }}, {{ a.interval_sec }}, {{ (a.custom_headers or "[]")|tojson }}, {{ (a.custom_query or "[]")|tojson }}, {{ (a.api_path or "")|tojson }}, {{ (a.api_method or "GET")|tojson }}, {{ (a.json_path or "")|tojson }}, {{ (a.field_phone or "")|tojson }}, {{ (a.field_code or "")|tojson }}, {{ (a.field_platform or "")|tojson }}, {{ (a.field_country or "")|tojson }}, {{ (a.field_message or "")|tojson }}, {{ (a.body_json or "")|tojson }})'>تعديل</button>
 <a href="/admin/apis/toggle/{{ a.id }}" class="act {% if a.enabled %}toggle-on{% else %}toggle-off{% endif %}">{% if a.enabled %}إيقاف{% else %}تشغيل{% endif %}</a>
 <a href="/admin/apis/delete/{{ a.id }}" class="act del" onclick="return confirm('حذف؟')">حذف</a>
 </div>
@@ -10356,6 +10614,21 @@ input:focus,select:focus{border-color:#7b2ff7}
 <div class="modal-box">
 <h3 id="modalTitle">إضافة لوحة</h3>
 <form method="POST" id="apiForm" action="/admin/apis/add">
+
+<div style="margin-bottom:14px;padding:12px;background:rgba(0,212,165,.06);border:1.5px dashed rgba(0,212,165,.35);border-radius:12px">
+<label style="color:#00d4a5;font-weight:800;font-size:12px;margin-bottom:8px;display:block">قالب جاهز (اختياري)</label>
+<select id="templateSelect" onchange="applyTemplate(this.value)" style="width:100%;padding:10px;font-size:13px;border-radius:10px;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.1);outline:none">
+<option value="">-- اختر قالب --</option>
+<option value="elking">ELKING SMS (Token)</option>
+<option value="elking_custom">ELKING SMS (مخصص)</option>
+<option value="basic_auth">لوحة Basic Auth (User + Pass)</option>
+<option value="bearer">لوحة Bearer Token</option>
+<option value="x_api_key">لوحة X-Api-Key</option>
+<option value="query_key">لوحة Query API Key</option>
+<option value="post_json">لوحة POST JSON</option>
+</select>
+<div style="font-size:11px;color:#6e6e8a;margin-top:6px">يُملأ الحقول تلقائياً — يمكنك تعديلها</div>
+</div>
 <label>اسم اللوحة</label>
 <input type="text" name="name" id="fName" required maxlength="60">
 <label>الرابط</label>
@@ -10365,6 +10638,7 @@ input:focus,select:focus{border-color:#7b2ff7}
 <option value="token">Token فقط</option>
 <option value="basic">User + Pass</option>
 <option value="both">Token + User/Pass</option>
+<option value="custom">مخصص (Headers / Query)</option>
 <option value="none">بدون</option>
 </select>
 <div id="tokenBlock">
@@ -10377,6 +10651,54 @@ input:focus,select:focus{border-color:#7b2ff7}
 <div><label>Password</label><input type="text" name="password" id="fPass" dir="ltr"></div>
 </div>
 </div>
+
+<div id="customBlock" style="display:none">
+<label>هيدرز مخصصة (Headers)</label>
+<div id="customHeadersList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+<button type="button" onclick="addCustomHeader()" style="width:100%;padding:10px;border:1.5px dashed rgba(0,212,255,.5);border-radius:10px;background:rgba(0,212,255,.05);color:#00d4ff;font-weight:800;font-size:12px;cursor:pointer;font-family:inherit">+ إضافة هيدر</button>
+
+<label style="margin-top:14px">Query Parameters مخصصة</label>
+<div id="customQueryList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+<button type="button" onclick="addCustomQuery()" style="width:100%;padding:10px;border:1.5px dashed rgba(123,47,247,.5);border-radius:10px;background:rgba(123,47,247,.05);color:#c8a2ff;font-weight:800;font-size:12px;cursor:pointer;font-family:inherit">+ إضافة Query</button>
+
+<input type="hidden" name="custom_headers" id="fCustomHeaders" value="[]">
+<input type="hidden" name="custom_query" id="fCustomQuery" value="[]">
+</div>
+
+<details id="advancedBlock" style="margin-top:14px;padding:14px;background:rgba(0,212,165,.05);border:1.5px dashed rgba(0,212,165,.3);border-radius:14px">
+<summary style="cursor:pointer;color:#00d4a5;font-weight:800;font-size:13px;padding:4px 0">إعدادات متقدمة (مسار، طريقة، حقول مخصصة)</summary>
+
+<div style="margin-top:12px">
+<label>مسار الأكواد المخصص</label>
+<input type="text" name="api_path" id="fApiPath" placeholder="/api/v1/codes" dir="ltr" style="font-family:monospace">
+<div style="font-size:11px;color:#6e6e8a;margin-top:4px">اتركه فاضي لاستخدام المسارات الافتراضية</div>
+
+<label>طريقة الطلب</label>
+<select name="api_method" id="fApiMethod">
+<option value="GET">GET</option>
+<option value="POST">POST</option>
+</select>
+
+<label>مسار الأكواد داخل JSON</label>
+<input type="text" name="json_path" id="fJsonPath" placeholder="data.items" dir="ltr" style="font-family:monospace">
+<div style="font-size:11px;color:#6e6e8a;margin-top:4px">مثال: data.items أو result.codes أو اتركه فاضي</div>
+
+<label>Body للـ POST (JSON)</label>
+<textarea name="body_json" id="fBodyJson" rows="3" placeholder='{"limit": 100}' dir="ltr" style="font-family:monospace;font-size:12px;direction:ltr;text-align:left;min-height:60px"></textarea>
+
+<div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)">
+<div style="font-size:12px;color:#00d4a5;font-weight:800;margin-bottom:8px">أسماء الحقول في رد اللوحة (اختياري)</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+<div><label style="font-size:11px">حقل الرقم</label><input type="text" name="field_phone" id="fFieldPhone" placeholder="phone" dir="ltr" style="font-size:12px;font-family:monospace"></div>
+<div><label style="font-size:11px">حقل الكود</label><input type="text" name="field_code" id="fFieldCode" placeholder="otp_code" dir="ltr" style="font-size:12px;font-family:monospace"></div>
+<div><label style="font-size:11px">حقل المنصة</label><input type="text" name="field_platform" id="fFieldPlatform" placeholder="app_name" dir="ltr" style="font-size:12px;font-family:monospace"></div>
+<div><label style="font-size:11px">حقل الدولة</label><input type="text" name="field_country" id="fFieldCountry" placeholder="country" dir="ltr" style="font-size:12px;font-family:monospace"></div>
+</div>
+<label style="font-size:11px;margin-top:8px">حقل الرسالة النصية</label>
+<input type="text" name="field_message" id="fFieldMessage" placeholder="message_text" dir="ltr" style="font-size:12px;font-family:monospace">
+</div>
+</div>
+</details>
 <label>فترة السحب (ثواني)</label>
 <input type="number" name="interval_sec" id="fInterval" value="60" min="10" max="3600">
 <label class="check-row"><input type="checkbox" name="enabled" id="fEnabled" checked><span>مفعّلة</span></label>
@@ -10386,14 +10708,227 @@ input:focus,select:focus{border-color:#7b2ff7}
 <button type="submit" class="btn btn-grad" style="margin-top:0">حفظ</button>
 <button type="button" class="btn" style="margin-top:0;background:rgba(255,107,138,.15);color:#ff6b8a" onclick="closeModal()">إلغاء</button>
 </div>
+
+<button type="button" class="btn" style="margin-top:10px;background:linear-gradient(135deg,#00d4ff,#0099cc)" onclick="testBeforeSave()" id="testBtn">
+اختبار الاتصال قبل الحفظ
+</button>
+
+<div id="testResult" style="display:none;margin-top:12px;padding:14px;border-radius:12px;font-size:12px;font-family:monospace;direction:ltr;text-align:left;white-space:pre-wrap;max-height:300px;overflow-y:auto"></div>
 </form>
 </div>
 </div>
 <script>
+var API_TEMPLATES = {
+    elking: {
+        name: "ELKING SMS",
+        url: "http://78.154.103.39:11105",
+        auth_type: "token",
+        token: "",
+        api_path: "/api/v1/codes",
+        api_method: "GET",
+        json_path: "",
+        field_phone: "phone_number",
+        field_code: "otp_code",
+        field_platform: "app_name",
+        field_country: "country",
+        field_message: "message_text",
+        custom_headers: [],
+        custom_query: []
+    },
+    elking_custom: {
+        name: "ELKING SMS",
+        url: "http://78.154.103.39:11105",
+        auth_type: "custom",
+        token: "",
+        api_path: "/api/v1/codes",
+        api_method: "GET",
+        json_path: "",
+        field_phone: "phone_number",
+        field_code: "otp_code",
+        field_platform: "app_name",
+        field_country: "country",
+        field_message: "message_text",
+        custom_headers: [{name: "X-API-Token", value: ""}],
+        custom_query: []
+    },
+    basic_auth: {
+        name: "",
+        url: "",
+        auth_type: "basic",
+        username: "",
+        password: "",
+        api_path: "",
+        api_method: "GET",
+        json_path: "",
+        field_phone: "phone",
+        field_code: "code",
+        field_platform: "app_name",
+        field_country: "country",
+        field_message: "message",
+        custom_headers: [],
+        custom_query: []
+    },
+    bearer: {
+        name: "",
+        url: "",
+        auth_type: "token",
+        token: "",
+        api_path: "/api/codes",
+        api_method: "GET",
+        json_path: "data",
+        field_phone: "phone",
+        field_code: "code",
+        field_platform: "service",
+        field_country: "country",
+        field_message: "message",
+        custom_headers: [],
+        custom_query: []
+    },
+    x_api_key: {
+        name: "",
+        url: "",
+        auth_type: "custom",
+        api_path: "/api/codes",
+        api_method: "GET",
+        json_path: "",
+        field_phone: "phone",
+        field_code: "code",
+        field_platform: "app",
+        field_country: "country",
+        field_message: "text",
+        custom_headers: [{name: "X-Api-Key", value: ""}],
+        custom_query: []
+    },
+    query_key: {
+        name: "",
+        url: "",
+        auth_type: "custom",
+        api_path: "/api/codes",
+        api_method: "GET",
+        json_path: "",
+        field_phone: "phone",
+        field_code: "code",
+        field_platform: "app",
+        field_country: "country",
+        field_message: "message",
+        custom_headers: [],
+        custom_query: [{name: "api_key", value: ""}, {name: "action", value: "codes"}]
+    },
+    post_json: {
+        name: "",
+        url: "",
+        auth_type: "custom",
+        api_path: "/api/codes",
+        api_method: "POST",
+        json_path: "",
+        field_phone: "phone",
+        field_code: "code",
+        field_platform: "app",
+        field_country: "country",
+        field_message: "message",
+        body_json: '{"limit": 100}',
+        custom_headers: [{name: "X-API-Token", value: ""}],
+        custom_query: []
+    }
+};
+
+function applyTemplate(key){
+    if(!key) return;
+    var t = API_TEMPLATES[key];
+    if(!t) return;
+    var setV = function(id, v){
+        var el = document.getElementById(id);
+        if(el && v !== undefined && v !== null) el.value = v;
+    };
+    setV('fName', t.name || '');
+    setV('fUrl', t.url || '');
+    setV('fAuth', t.auth_type || 'token');
+    setV('fToken', t.token || '');
+    setV('fUser', t.username || '');
+    setV('fPass', t.password || '');
+    setV('fApiPath', t.api_path || '');
+    setV('fApiMethod', t.api_method || 'GET');
+    setV('fJsonPath', t.json_path || '');
+    setV('fFieldPhone', t.field_phone || '');
+    setV('fFieldCode', t.field_code || '');
+    setV('fFieldPlatform', t.field_platform || '');
+    setV('fFieldCountry', t.field_country || '');
+    setV('fFieldMessage', t.field_message || '');
+    setV('fBodyJson', t.body_json || '');
+    // الهيدرز
+    var chList = document.getElementById('customHeadersList');
+    if(chList){
+        chList.innerHTML = '';
+        (t.custom_headers || []).forEach(function(h){ addCustomHeader(h.name, h.value); });
+    }
+    // Query
+    var cqList = document.getElementById('customQueryList');
+    if(cqList){
+        cqList.innerHTML = '';
+        (t.custom_query || []).forEach(function(q){ addCustomQuery(q.name, q.value); });
+    }
+    // افتح الإعدادات المتقدمة إن كانت تحتوي بيانات
+    var adv = document.getElementById('advancedBlock');
+    if(adv && (t.api_path || t.json_path || t.field_phone)) adv.open = true;
+    authChanged();
+    updateCustom();
+}
+
 function authChanged(){
     var v = document.getElementById('fAuth').value;
     document.getElementById('tokenBlock').style.display = (v === 'token' || v === 'both') ? 'block' : 'none';
     document.getElementById('basicBlock').style.display = (v === 'basic' || v === 'both') ? 'block' : 'none';
+    var cb = document.getElementById('customBlock');
+    if(cb) cb.style.display = (v === 'custom') ? 'block' : 'none';
+}
+
+function addCustomHeader(name, value){
+    var list = document.getElementById('customHeadersList');
+    if(!list) return;
+    var row = document.createElement('div');
+    row.className = 'custom-row';
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 36px;gap:6px;align-items:center';
+    row.innerHTML =
+        '<input type="text" class="ch-name" placeholder="X-API-Key" value="' + (name || '').replace(/"/g, '&quot;') + '" style="padding:8px;font-size:12px;font-family:monospace;border-radius:8px;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.1);outline:none">' +
+        '<input type="text" class="ch-value" placeholder="القيمة" value="' + (value || '').replace(/"/g, '&quot;') + '" style="padding:8px;font-size:12px;font-family:monospace;border-radius:8px;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.1);outline:none">' +
+        '<button type="button" onclick="this.parentElement.remove(); updateCustom()" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(233,69,96,.15);color:#ff6b8a;cursor:pointer;font-size:16px;font-weight:900">x</button>';
+    list.appendChild(row);
+    row.querySelectorAll('input').forEach(function(inp){ inp.addEventListener('input', updateCustom); });
+    updateCustom();
+}
+
+function addCustomQuery(name, value){
+    var list = document.getElementById('customQueryList');
+    if(!list) return;
+    var row = document.createElement('div');
+    row.className = 'custom-row';
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 36px;gap:6px;align-items:center';
+    row.innerHTML =
+        '<input type="text" class="cq-name" placeholder="key" value="' + (name || '').replace(/"/g, '&quot;') + '" style="padding:8px;font-size:12px;font-family:monospace;border-radius:8px;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.1);outline:none">' +
+        '<input type="text" class="cq-value" placeholder="value" value="' + (value || '').replace(/"/g, '&quot;') + '" style="padding:8px;font-size:12px;font-family:monospace;border-radius:8px;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.1);outline:none">' +
+        '<button type="button" onclick="this.parentElement.remove(); updateCustom()" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(233,69,96,.15);color:#ff6b8a;cursor:pointer;font-size:16px;font-weight:900">x</button>';
+    list.appendChild(row);
+    row.querySelectorAll('input').forEach(function(inp){ inp.addEventListener('input', updateCustom); });
+    updateCustom();
+}
+
+function updateCustom(){
+    var headers = [];
+    document.querySelectorAll('#customHeadersList .custom-row').forEach(function(row){
+        var n = row.querySelector('.ch-name').value.trim();
+        var v = row.querySelector('.ch-value').value;
+        if(n) headers.push({name: n, value: v});
+    });
+    var queries = [];
+    document.querySelectorAll('#customQueryList .custom-row').forEach(function(row){
+        var n = row.querySelector('.cq-name').value.trim();
+        var v = row.querySelector('.cq-value').value;
+        if(n) queries.push({name: n, value: v});
+    });
+    var ch = document.getElementById('fCustomHeaders');
+    var cq = document.getElementById('fCustomQuery');
+    if(ch) ch.value = JSON.stringify(headers);
+    if(cq) cq.value = JSON.stringify(queries);
 }
 function showAddModal(){
     document.getElementById('modalTitle').textContent = 'إضافة لوحة';
@@ -10408,10 +10943,33 @@ function showAddModal(){
     document.getElementById('fEnabled').checked = true;
     document.getElementById('fSmart').checked = true;
     document.getElementById('fPush').checked = true;
+    // صفّر الحقول المخصصة
+    var chList = document.getElementById('customHeadersList');
+    var cqList = document.getElementById('customQueryList');
+    if(chList) chList.innerHTML = '';
+    if(cqList) cqList.innerHTML = '';
+    var ch = document.getElementById('fCustomHeaders');
+    var cq = document.getElementById('fCustomQuery');
+    if(ch) ch.value = '[]';
+    if(cq) cq.value = '[]';
+    // صفّر الإعدادات المتقدمة
+    var fields = ['fApiPath','fJsonPath','fBodyJson','fFieldPhone','fFieldCode','fFieldPlatform','fFieldCountry','fFieldMessage'];
+    fields.forEach(function(id){
+        var el = document.getElementById(id);
+        if(el) el.value = '';
+    });
+    var m = document.getElementById('fApiMethod');
+    if(m) m.value = 'GET';
+    var adv = document.getElementById('advancedBlock');
+    if(adv) adv.open = false;
+    var ts = document.getElementById('templateSelect');
+    if(ts) ts.value = '';
+    var tr = document.getElementById('testResult');
+    if(tr) tr.style.display = 'none';
     authChanged();
     document.getElementById('apiModal').classList.add('show');
 }
-function showEditModal(id, name, url, token, username, password, auth, enabled, smart, push, interval){
+function showEditModal(id, name, url, token, username, password, auth, enabled, smart, push, interval, customHeaders, customQuery, apiPath, apiMethod, jsonPath, fieldPhone, fieldCode, fieldPlatform, fieldCountry, fieldMessage, bodyJson){
     document.getElementById('modalTitle').textContent = 'تعديل اللوحة';
     document.getElementById('apiForm').action = '/admin/apis/edit/' + id;
     document.getElementById('fName').value = name || '';
@@ -10424,11 +10982,178 @@ function showEditModal(id, name, url, token, username, password, auth, enabled, 
     document.getElementById('fEnabled').checked = !!enabled;
     document.getElementById('fSmart').checked = !!smart;
     document.getElementById('fPush').checked = !!push;
+    // حمّل الحقول المخصصة
+    var chList = document.getElementById('customHeadersList');
+    var cqList = document.getElementById('customQueryList');
+    if(chList) chList.innerHTML = '';
+    if(cqList) cqList.innerHTML = '';
+    try {
+        var chArr = typeof customHeaders === 'string' ? JSON.parse(customHeaders) : (customHeaders || []);
+        if(Array.isArray(chArr)){
+            chArr.forEach(function(it){ addCustomHeader(it.name || '', it.value || ''); });
+        }
+    } catch(e){}
+    try {
+        var cqArr = typeof customQuery === 'string' ? JSON.parse(customQuery) : (customQuery || []);
+        if(Array.isArray(cqArr)){
+            cqArr.forEach(function(it){ addCustomQuery(it.name || '', it.value || ''); });
+        }
+    } catch(e){}
+    // حمّل الإعدادات المتقدمة
+    var setV = function(id, v){
+        var el = document.getElementById(id);
+        if(el) el.value = (v === undefined || v === null) ? '' : v;
+    };
+    setV('fApiPath', apiPath);
+    setV('fJsonPath', jsonPath);
+    setV('fBodyJson', bodyJson);
+    setV('fFieldPhone', fieldPhone);
+    setV('fFieldCode', fieldCode);
+    setV('fFieldPlatform', fieldPlatform);
+    setV('fFieldCountry', fieldCountry);
+    setV('fFieldMessage', fieldMessage);
+    var m = document.getElementById('fApiMethod');
+    if(m) m.value = (apiMethod || 'GET');
+    var adv = document.getElementById('advancedBlock');
+    if(adv) adv.open = false;
+    var ts = document.getElementById('templateSelect');
+    if(ts) ts.value = '';
+    var tr = document.getElementById('testResult');
+    if(tr) tr.style.display = 'none';
     authChanged();
     document.getElementById('apiModal').classList.add('show');
 }
 function closeModal(){
     document.getElementById('apiModal').classList.remove('show');
+    var tr = document.getElementById('testResult');
+    if(tr) tr.style.display = 'none';
+}
+
+async function testBeforeSave(){
+    var btn = document.getElementById('testBtn');
+    var box = document.getElementById('testResult');
+    if(!btn || !box) return;
+
+    // اجمع كل البيانات
+    var headers = [];
+    document.querySelectorAll('#customHeadersList .custom-row').forEach(function(row){
+        var n = row.querySelector('.ch-name').value.trim();
+        var v = row.querySelector('.ch-value').value;
+        if(n) headers.push({name: n, value: v});
+    });
+    var queries = [];
+    document.querySelectorAll('#customQueryList .custom-row').forEach(function(row){
+        var n = row.querySelector('.cq-name').value.trim();
+        var v = row.querySelector('.cq-value').value;
+        if(n) queries.push({name: n, value: v});
+    });
+
+    var payload = {
+        name: document.getElementById('fName').value,
+        url: document.getElementById('fUrl').value,
+        token: document.getElementById('fToken').value,
+        username: document.getElementById('fUser').value,
+        password: document.getElementById('fPass').value,
+        auth_type: document.getElementById('fAuth').value,
+        custom_headers: JSON.stringify(headers),
+        custom_query: JSON.stringify(queries),
+        api_path: (document.getElementById('fApiPath') || {}).value || '',
+        api_method: (document.getElementById('fApiMethod') || {}).value || 'GET',
+        json_path: (document.getElementById('fJsonPath') || {}).value || '',
+        field_phone: (document.getElementById('fFieldPhone') || {}).value || '',
+        field_code: (document.getElementById('fFieldCode') || {}).value || '',
+        field_platform: (document.getElementById('fFieldPlatform') || {}).value || '',
+        field_country: (document.getElementById('fFieldCountry') || {}).value || '',
+        field_message: (document.getElementById('fFieldMessage') || {}).value || '',
+        body_json: (document.getElementById('fBodyJson') || {}).value || ''
+    };
+
+    btn.disabled = true;
+    btn.innerHTML = 'جاري الاختبار...';
+    box.style.display = 'block';
+    box.style.background = 'rgba(0,212,255,.08)';
+    box.style.border = '1px solid rgba(0,212,255,.3)';
+    box.style.color = '#8ee4ff';
+    box.textContent = 'جاري الاتصال...';
+
+    try {
+        var r = await fetch('/admin/apis/test-temp', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+        });
+        var d = await r.json();
+
+        var lines = [];
+        lines.push('===========================================');
+        lines.push('نتيجة الاختبار');
+        lines.push('===========================================');
+        lines.push('');
+        lines.push('الحالة: ' + (d.ok ? 'OK' : 'FAIL'));
+        if(d.status) lines.push('HTTP Status: ' + d.status + ' ' + (d.status_text || ''));
+        if(d.method) lines.push('Method: ' + d.method);
+        if(d.final_url) lines.push('URL: ' + d.final_url);
+        if(d.elapsed_ms) lines.push('الوقت: ' + d.elapsed_ms + ' ms');
+        lines.push('');
+        lines.push('-------------------------------------------');
+        lines.push('Headers المرسلة:');
+        lines.push('-------------------------------------------');
+        try {
+            for(var k in d.headers_sent){
+                var v = d.headers_sent[k];
+                if(k === 'Authorization' || k.indexOf('Token') > -1 || k.indexOf('Key') > -1){
+                    v = String(v).substring(0, 20) + '... (مخفي)';
+                }
+                lines.push('  ' + k + ': ' + v);
+            }
+        } catch(e){}
+        lines.push('');
+        lines.push('-------------------------------------------');
+        lines.push('الرد الخام:');
+        lines.push('-------------------------------------------');
+        lines.push(d.raw_body || '(فاضي)');
+        lines.push('');
+        if(d.parse_ok){
+            lines.push('-------------------------------------------');
+            lines.push('تحليل: نجح — عدد النتائج: ' + d.count);
+            lines.push('-------------------------------------------');
+            if(d.sample && d.sample.length > 0){
+                lines.push('عينة:');
+                lines.push(JSON.stringify(d.sample, null, 2));
+            } else {
+                lines.push('(لا توجد نتائج — لكن الاستجابة صحيحة)');
+            }
+        } else if(d.parse_error){
+            lines.push('خطأ في التحليل: ' + d.parse_error);
+        }
+        if(d.error){
+            lines.push('');
+            lines.push('خطأ: ' + d.error);
+        }
+
+        box.textContent = lines.join('\n');
+        if(d.ok && d.count > 0){
+            box.style.background = 'rgba(0,212,165,.08)';
+            box.style.border = '1px solid rgba(0,212,165,.3)';
+            box.style.color = '#6fe3c1';
+        } else if(d.ok){
+            box.style.background = 'rgba(251,191,36,.08)';
+            box.style.border = '1px solid rgba(251,191,36,.3)';
+            box.style.color = '#fbbf24';
+        } else {
+            box.style.background = 'rgba(233,69,96,.08)';
+            box.style.border = '1px solid rgba(233,69,96,.3)';
+            box.style.color = '#ff8aa3';
+        }
+    } catch(e){
+        box.textContent = 'خطأ: ' + e.message;
+        box.style.background = 'rgba(233,69,96,.08)';
+        box.style.border = '1px solid rgba(233,69,96,.3)';
+        box.style.color = '#ff8aa3';
+    }
+    btn.disabled = false;
+    btn.innerHTML = 'اختبار الاتصال قبل الحفظ';
 }
 function testOne(e, id){
     e.preventDefault();
@@ -10536,6 +11261,34 @@ def admin_apis_add():
     enabled = 1 if request.form.get("enabled") == "on" else 0
     smart_bind = 1 if request.form.get("smart_bind") == "on" else 0
     auto_push = 1 if request.form.get("auto_push") == "on" else 0
+    custom_headers = request.form.get("custom_headers", "[]").strip() or "[]"
+    custom_query = request.form.get("custom_query", "[]").strip() or "[]"
+    # تحقق أن JSON صالح
+    try:
+        json.loads(custom_headers)
+    except Exception:
+        custom_headers = "[]"
+    try:
+        json.loads(custom_query)
+    except Exception:
+        custom_query = "[]"
+    api_path = request.form.get("api_path", "").strip()
+    api_method = request.form.get("api_method", "GET").strip().upper()
+    if api_method not in ("GET", "POST"):
+        api_method = "GET"
+    json_path = request.form.get("json_path", "").strip()
+    field_phone = request.form.get("field_phone", "").strip()
+    field_code = request.form.get("field_code", "").strip()
+    field_platform = request.form.get("field_platform", "").strip()
+    field_country = request.form.get("field_country", "").strip()
+    field_message = request.form.get("field_message", "").strip()
+    body_json = request.form.get("body_json", "").strip()
+    # تحقق من body_json
+    if body_json:
+        try:
+            json.loads(body_json)
+        except Exception:
+            body_json = ""
     try:
         interval_sec = int(request.form.get("interval_sec", "60") or "60")
     except Exception:
@@ -10543,7 +11296,12 @@ def admin_apis_add():
     if interval_sec < 10:
         interval_sec = 10
     apis_add(name, url, token, username, password, auth_type,
-             enabled, smart_bind, auto_push, interval_sec)
+             enabled, smart_bind, auto_push, interval_sec,
+             custom_headers=custom_headers, custom_query=custom_query,
+             api_path=api_path, api_method=api_method, json_path=json_path,
+             field_phone=field_phone, field_code=field_code,
+             field_platform=field_platform, field_country=field_country,
+             field_message=field_message, body_json=body_json)
     return redirect(url_for("admin_apis"))
 
 
@@ -10554,6 +11312,25 @@ def admin_apis_edit(aid):
     url = request.form.get("url", "").strip()
     if not name or not url:
         return redirect(url_for("admin_apis"))
+    custom_headers = request.form.get("custom_headers", "[]").strip() or "[]"
+    custom_query = request.form.get("custom_query", "[]").strip() or "[]"
+    try:
+        json.loads(custom_headers)
+    except Exception:
+        custom_headers = "[]"
+    try:
+        json.loads(custom_query)
+    except Exception:
+        custom_query = "[]"
+    api_method = request.form.get("api_method", "GET").strip().upper()
+    if api_method not in ("GET", "POST"):
+        api_method = "GET"
+    body_json = request.form.get("body_json", "").strip()
+    if body_json:
+        try:
+            json.loads(body_json)
+        except Exception:
+            body_json = ""
     fields = {
         "name": name,
         "url": url.rstrip('/'),
@@ -10564,6 +11341,17 @@ def admin_apis_edit(aid):
         "enabled": 1 if request.form.get("enabled") == "on" else 0,
         "smart_bind": 1 if request.form.get("smart_bind") == "on" else 0,
         "auto_push": 1 if request.form.get("auto_push") == "on" else 0,
+        "custom_headers": custom_headers,
+        "custom_query": custom_query,
+        "api_path": request.form.get("api_path", "").strip(),
+        "api_method": api_method,
+        "json_path": request.form.get("json_path", "").strip(),
+        "field_phone": request.form.get("field_phone", "").strip(),
+        "field_code": request.form.get("field_code", "").strip(),
+        "field_platform": request.form.get("field_platform", "").strip(),
+        "field_country": request.form.get("field_country", "").strip(),
+        "field_message": request.form.get("field_message", "").strip(),
+        "body_json": body_json,
     }
     try:
         iv = int(request.form.get("interval_sec", "60") or "60")
@@ -10600,6 +11388,176 @@ def admin_apis_test(aid):
 def admin_apis_test_all():
     results = apis_test_all()
     return jsonify({"ok": True, "results": results, "total": len(results)})
+
+
+@app.route("/admin/apis/test-temp", methods=["POST"])
+@admin_required
+def admin_apis_test_temp():
+    """اختبار لوحة قبل الحفظ — يقبل بيانات من النموذج"""
+    data = request.get_json(silent=True) or {}
+    # بناء كائن لوحة مؤقت
+    api = {
+        "id": 0,
+        "name": data.get("name", "Test"),
+        "url": (data.get("url") or "").strip().rstrip("/"),
+        "token": (data.get("token") or "").strip(),
+        "username": (data.get("username") or "").strip(),
+        "password": data.get("password") or "",
+        "auth_type": (data.get("auth_type") or "token").strip(),
+        "custom_headers": data.get("custom_headers") or "[]",
+        "custom_query": data.get("custom_query") or "[]",
+        "api_path": (data.get("api_path") or "").strip(),
+        "api_method": (data.get("api_method") or "GET").strip().upper(),
+        "json_path": (data.get("json_path") or "").strip(),
+        "field_phone": (data.get("field_phone") or "").strip(),
+        "field_code": (data.get("field_code") or "").strip(),
+        "field_platform": (data.get("field_platform") or "").strip(),
+        "field_country": (data.get("field_country") or "").strip(),
+        "field_message": (data.get("field_message") or "").strip(),
+        "body_json": (data.get("body_json") or "").strip(),
+    }
+    if not api["url"]:
+        return jsonify({"ok": False, "error": "الرابط مطلوب", "raw_response": ""})
+
+    # ═══ 1. احصل على الرد الخام ═══
+    raw_data = _raw_fetch(api, limit=5)
+
+    # ═══ 2. جرب الاستخراج ═══
+    extracted = []
+    parse_ok = False
+    parse_err = ""
+    if raw_data.get("ok") and raw_data.get("json"):
+        try:
+            extracted = _extract_codes_from_response(raw_data["json"], api)
+            parse_ok = True
+        except Exception as e:
+            parse_err = str(e)
+
+    # ═══ 3. حساب عدد النتائج ═══
+    count = len(extracted) if isinstance(extracted, list) else 0
+
+    # ═══ 4. لو فيه نتائج، خذ عينة ═══
+    sample = extracted[:2] if extracted else []
+
+    return jsonify({
+        "ok": raw_data.get("ok", False),
+        "status": raw_data.get("status", 0),
+        "status_text": raw_data.get("status_text", ""),
+        "method": api["api_method"],
+        "final_url": raw_data.get("final_url", ""),
+        "elapsed_ms": raw_data.get("elapsed_ms", 0),
+        "headers_sent": raw_data.get("headers_sent", {}),
+        "raw_body": raw_data.get("body_text", "")[:3000],
+        "json": raw_data.get("json") if raw_data.get("json") else None,
+        "parse_ok": parse_ok,
+        "parse_error": parse_err,
+        "count": count,
+        "sample": sample,
+        "error": raw_data.get("error", "")
+    })
+
+
+def _raw_fetch(api, limit=5):
+    """يجلب الرد الخام من اللوحة (بدون معالجة)"""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    from urllib.parse import urlencode as _urlenc
+    import time as _t
+
+    result = {
+        "ok": False,
+        "status": 0,
+        "status_text": "",
+        "final_url": "",
+        "elapsed_ms": 0,
+        "headers_sent": {},
+        "body_text": "",
+        "json": None,
+        "error": ""
+    }
+
+    base = api.get("url", "").rstrip("/")
+    if not base:
+        result["error"] = "الرابط فاضي"
+        return result
+
+    headers = _api_build_headers(api)
+    result["headers_sent"] = dict(headers)
+
+    custom_path = api.get("api_path", "").strip()
+    if custom_path:
+        if not custom_path.startswith("/"):
+            custom_path = "/" + custom_path
+        paths = [custom_path]
+    else:
+        paths = ["/api/v1/codes", "/api/codes", "/codes"]
+
+    method = api.get("api_method", "GET").upper()
+    if method not in ("GET", "POST"):
+        method = "GET"
+
+    body_json = api.get("body_json", "").strip()
+    body_bytes = None
+    if method == "POST":
+        if body_json:
+            try:
+                body_data = json.loads(body_json)
+            except Exception:
+                body_data = {"limit": limit}
+        else:
+            body_data = {"limit": limit}
+        body_bytes = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    params = []
+    if method == "GET":
+        params.append(("limit", str(limit)))
+        if (api.get("auth_type") or "").lower() == "custom":
+            params.extend(_api_build_query_params(api))
+
+    last_err = ""
+    for path in paths:
+        try:
+            _url = base + path
+            if params:
+                sep = "&" if "?" in _url else "?"
+                _url = _url + sep + _urlenc(params)
+
+            result["final_url"] = _url
+            req = _ur.Request(_url, data=body_bytes, headers=headers, method=method)
+            t0 = _t.time()
+            with _ur.urlopen(req, timeout=15) as resp:
+                elapsed = int((_t.time() - t0) * 1000)
+                raw = resp.read().decode("utf-8", errors="ignore")
+                result["elapsed_ms"] = elapsed
+                result["status"] = resp.status
+                result["status_text"] = resp.reason or ""
+                result["body_text"] = raw
+                result["ok"] = True
+                try:
+                    result["json"] = json.loads(raw)
+                except Exception:
+                    result["json"] = None
+                return result
+        except _ue.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+            result["status"] = e.code
+            result["status_text"] = e.reason or ""
+            result["body_text"] = body
+            result["error"] = "HTTP " + str(e.code)
+            last_err = result["error"]
+            continue
+        except Exception as e:
+            last_err = type(e).__name__ + ": " + str(e)[:200]
+            result["error"] = last_err
+            continue
+
+    result["error"] = last_err
+    return result
 
 
 @app.route("/admin/apis/fetch-now")
@@ -16891,13 +17849,16 @@ if __name__ == "__main__":
     print(PURPLE + "  ═══════════════════════════════════════════════════════" + R)
     print("")
 
-    db_init()  # إنشاء/تحديث جداول قاعدة البيانات
+    # ═══ 1. أولاً: إنشاء/تحديث الجداول ═══
+    db_init()
+    print("✅ قاعدة البيانات جاهزة")
+
+    # ═══ 2. ثانياً: استيراد اللوحة القديمة (بعد التحديث) ═══
     try:
         apis_import_legacy()
     except Exception as _e:
         print('[APIS] import legacy at startup err:', _e)
     _ensure_platform_icon_pngs()
-    print('✅ قاعدة البيانات جاهزة')
     start_telegram_bot()
     start_external_api_poller()
 
