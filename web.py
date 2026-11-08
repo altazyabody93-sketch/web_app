@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS ticket_messages(
   ticket_id INTEGER NOT NULL,
   sender TEXT NOT NULL,
   text TEXT NOT NULL,
+  is_read INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
@@ -376,6 +377,10 @@ def seed_buy_prices():
 def init_db():
     con = sqlite3.connect(DB_PATH)
     con.executescript(SCHEMA)
+    # ترحيل: عمود is_read في رسائل التذاكر (للقواعد القديمة)
+    _tm_cols = [r[1] for r in con.execute("PRAGMA table_info(ticket_messages)")]
+    if "is_read" not in _tm_cols:
+        con.execute("ALTER TABLE ticket_messages ADD COLUMN is_read INTEGER DEFAULT 0")
     # إضافة أعمدة الإشعارات تلقائياً (لو الجدول موجود من نسخة قديمة)
     try:
         cols = [r[1] for r in con.execute("PRAGMA table_info(announcements)")]
@@ -2736,6 +2741,15 @@ def support():
 
 
 
+@app.route("/support/ticket/<int:tid>")
+@login_required
+def support_ticket_redirect(tid):
+    u = current_user()
+    t = db().execute("SELECT id FROM tickets WHERE id=? AND user_id=?", (tid, u["user_id"])).fetchone()
+    if not t:
+        flash("التذكرة غير موجودة.", "error")
+    return redirect(url_for("support"))
+
 @app.route("/support/history")
 @login_required
 def support_history():
@@ -3465,8 +3479,8 @@ def admin_chat(uid):
         msgs_html += (
             '<div style="display:flex; justify-content:' + align + '; margin-bottom:12px; padding:0 8px;">'
             '<div style="max-width:80%;">'
-            '<div style="display:flex; justify-content:' + ('flex-start' if not is_user else 'flex-end') + '; align-items:center; gap:6px; margin-bottom:4px;">'
-            + (avatar_small if not is_user else '') +
+            '<div style="display:flex; justify-content:' + align + '; align-items:center; gap:6px; margin-bottom:4px;">'
+            + (avatar_small if not is_admin else '') +
             '<div style="font-size:10px; color:var(--muted); text-align:' + ta + ';">' + label + ' · ' + m["created_at"][11:16] + '</div>'
             '</div>'
             '<div style="background:' + bg + '; color:' + txt_color + '; padding:12px 16px; border-radius:' + radius + '; font-size:14px; line-height:1.5; box-shadow:0 2px 8px rgba(0,0,0,0.2); word-wrap:break-word; display:flex; align-items:center; justify-content:space-between; gap:8px;">'
