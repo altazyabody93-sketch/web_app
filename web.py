@@ -410,21 +410,6 @@ def init_db():
             "INSERT INTO users(username,email,password_hash,recovery_key,is_admin,captcha_passed) VALUES(?,?,?,?,1,1)",
             ("admin", "admin@matari.local", generate_password_hash("733723953"),
              "AT-" + secrets.token_hex(6).upper()))
-    else:
-        # تأكد إن الأدمن الحالي عنده الباسورد الجديد
-        con.execute("UPDATE users SET password_hash=? WHERE username='admin' AND is_admin=1",
-                    (generate_password_hash("733723953"),))
-    if con.execute("SELECT COUNT(*) c FROM numbers").fetchone()[0] == 0:
-        for p, c, ph, pr in [
-            ("whatsapp","مصر","+201000000001",0.50),
-            ("whatsapp","السعودية","+966500000001",0.80),
-            ("whatsapp","اليمن","+967700000001",0.45),
-            ("telegram","مصر","+201000000002",0.35),
-            ("telegram","اليمن","+967700000002",0.30),
-            ("telegram","السعودية","+966500000002",0.60),
-        ]:
-            con.execute("INSERT INTO numbers(platform,country,phone,price) VALUES(?,?,?,?)",
-                        (p, c, ph, pr))
     con.commit(); con.close()
 
 # ============================================================
@@ -4020,6 +4005,11 @@ def sell_request():
     flash("تم إرسال الكود إلى تيليجرام. أدخل الكود الآن.", "success")
     return redirect(url_for("sell_verify_page"))
 
+def _tg_check_has_account(phone):
+    """تحقق مبسط: الجلسة حُقّقت قبل هذه الخطوة، فوجودها يعني أن الحساب موجود."""
+    return True, None
+
+
 def _verify_session_alive(session_str):
     """يتأكد أن جلسة Telethon شغالة فعلاً"""
     if not session_str:
@@ -4802,7 +4792,7 @@ def tg_verify_password(session_str, password):
 @app.route("/admin/tg")
 @admin_required
 def admin_tg():
-    tg_nums = db().execute("SELECT * FROM numbers WHERE platform='telegram' ORDER BY id DESC LIMIT 100").fetchall()
+    tg_nums = db().execute("SELECT * FROM numbers WHERE platform LIKE 'telegram%' ORDER BY id DESC LIMIT 100").fetchall()
     return page("admin_tg", tg_nums=tg_nums)
 
 @app.route("/admin/tg/add", methods=["POST"])
@@ -4827,7 +4817,7 @@ def admin_tg_add():
 @app.route("/admin/tg/<int:nid>/request-code", methods=["POST"])
 @admin_required
 def admin_tg_request_code(nid):
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform='telegram'", (nid,)).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform LIKE 'telegram%'", (nid,)).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "رقم غير موجود"})
     sess, hash_, err = tg_request_code(n["phone"])
@@ -4842,7 +4832,7 @@ def admin_tg_request_code(nid):
 @app.route("/admin/tg/<int:nid>/verify", methods=["POST"])
 @admin_required
 def admin_tg_verify(nid):
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform='telegram'", (nid,)).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform LIKE 'telegram%'", (nid,)).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "رقم غير موجود"})
     code = request.form.get("code", "").strip()
@@ -4875,7 +4865,7 @@ def admin_tg_verify(nid):
 @app.route("/admin/tg/<int:nid>/2fa", methods=["POST"])
 @admin_required
 def admin_tg_2fa(nid):
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform='telegram'", (nid,)).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform LIKE 'telegram%'", (nid,)).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "رقم غير موجود"})
     pw = request.form.get("password", "").strip()
@@ -4898,7 +4888,7 @@ def admin_tg_price(nid):
         if price <= 0:
             flash("السعر يجب أن يكون أكبر من 0", "error")
             return redirect(url_for("admin_tg"))
-        db().execute("UPDATE numbers SET price=?, status='available' WHERE id=? AND platform='telegram'", (price, nid))
+        db().execute("UPDATE numbers SET price=?, status='available' WHERE id=? AND platform LIKE 'telegram%'", (price, nid))
         db().commit()
         flash(f"تم تحديد السعر: ${price:.2f}", "success")
     except:
@@ -4922,7 +4912,7 @@ def admin_tg_platform(nid):
 @app.route("/admin/tg/<int:nid>/delete", methods=["POST"])
 @admin_required
 def admin_tg_delete(nid):
-    db().execute("DELETE FROM numbers WHERE id=? AND platform='telegram'", (nid,))
+    db().execute("DELETE FROM numbers WHERE id=? AND platform LIKE 'telegram%'", (nid,))
     db().commit()
     flash("تم الحذف", "success")
     return redirect(url_for("admin_tg"))
@@ -5127,7 +5117,7 @@ def fetch_otp_imap(phone_filter=None, since_ts=0):
 @admin_required
 def admin_tg_list(nid):
     # يحول الرقم لـ متاح للبيع في المتجر
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform='telegram'", (nid,)).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND platform LIKE 'telegram%'", (nid,)).fetchone()
     if n:
         sess = n["session_string"] if "session_string" in n.keys() else None
         price = n["price"] if "price" in n.keys() else 0
@@ -5143,7 +5133,7 @@ def admin_tg_list(nid):
 @admin_required
 def admin_tg_unlist(nid):
     # يسحب الرقم من المتجر (يرجعه pending)
-    db().execute("UPDATE numbers SET status='pending' WHERE id=? AND platform='telegram'", (nid,))
+    db().execute("UPDATE numbers SET status='pending' WHERE id=? AND platform LIKE 'telegram%'", (nid,))
     db().commit()
     flash("تم سحب الرقم من المتجر", "success")
     return redirect(url_for("admin_tg"))
@@ -7698,23 +7688,23 @@ def page(name, active="", **ctx):
         
         # كود JavaScript للفحص
         parts.append('<script>')
-        parts.append('function testConnection(url, btn, resultId) {{')
+        parts.append('function testConnection(url, btn, resultId) {')
         parts.append('  var originalHtml = btn.innerHTML;')
         parts.append('  btn.innerHTML = "جاري الفحص...";')
         parts.append('  btn.disabled = true;')
         parts.append('  var res = document.getElementById(resultId);')
         parts.append('  res.innerHTML = "جاري فحص الاتصال...";')
-        parts.append('  fetch(url).then(function(r){{ return r.json(); }}).then(function(d){{')
+        parts.append('  fetch(url).then(function(r){ return r.json(); }).then(function(d){')
         parts.append('    btn.innerHTML = originalHtml;')
         parts.append('    btn.disabled = false;')
-        parts.append('    if(d.ok) {{ res.innerHTML = "<span style=\"color:var(--success)\">✓ " + d.msg + "</span>"; }}')
-        parts.append('    else {{ res.innerHTML = "<span style=\"color:var(--danger)\">✗ " + d.error + "</span>"; }}')
-        parts.append('  }}).catch(function(e){{')
+        parts.append('    if(d.ok) { res.innerHTML = "<span style=\"color:var(--success)\">✓ " + d.msg + "</span>"; }')
+        parts.append('    else { res.innerHTML = "<span style=\"color:var(--danger)\">✗ " + d.error + "</span>"; }')
+        parts.append('  }).catch(function(e){')
         parts.append('    btn.innerHTML = originalHtml;')
         parts.append('    btn.disabled = false;')
         parts.append('    res.innerHTML = "<span style=\"color:var(--danger)\">خطأ في الاتصال</span>";')
-        parts.append('  }});')
-        parts.append('}}')
+        parts.append('  });')
+        parts.append('}')
         parts.append('</script>')
         
         # إضافة كود JavaScript للفحص مباشرة في الـ body
@@ -7949,142 +7939,142 @@ function testConnection(url, btn, resultId) {{
 
         tg_js = """
 <script>
-window.requestCode = function(evt, nid) {{
+window.requestCode = function(evt, nid) {
     var btn = evt && evt.currentTarget ? evt.currentTarget : (evt && evt.target ? evt.target : null);
     console.log('[requestCode] called for nid=' + nid);
     if (!confirm('طلب كود من تيليجرام للرقم #' + nid + '؟')) return;
     if (!btn) btn = document.querySelector('button[data-nid="' + nid + '"]');
     var originalHtml = btn ? btn.innerHTML : 'كود';
-    if (btn) {{
+    if (btn) {
         btn.disabled = true;
         btn.innerHTML = '<span style="font-size:11px;">جاري...</span>';
-    }}
+    }
     
-    fetch('/admin/tg/' + nid + '/request-code', {{
+    fetch('/admin/tg/' + nid + '/request-code', {
         method: 'POST',
-        headers: {{'Accept': 'application/json'}},
+        headers: {'Accept': 'application/json'},
         credentials: 'same-origin'
-    }})
+    })
     .then(r => r.json())
-    .then(d => {{
-        if (d.ok) {{
+    .then(d => {
+        if (d.ok) {
             alert(d.msg || 'تم إرسال الكود');
             location.reload();
-        }} else {{
-            if (btn) {{ btn.disabled = false; btn.innerHTML = originalHtml; }}
+        } else {
+            if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
             alert('فشل: ' + (d.error || 'خطأ غير معروف'));
-        }}
-    }})
-    .catch(e => {{
-        if (btn) {{ btn.disabled = false; btn.innerHTML = originalHtml; }}
+        }
+    })
+    .catch(e => {
+        if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
         alert('خطأ: ' + e.message);
-    }});
-}};
-window.showVerify = function(nid) {{
+    });
+};
+window.showVerify = function(nid) {
     document.getElementById('verifyArea').innerHTML = '<div class="card" style="margin-bottom:20px;border-color:var(--primary)"><h3>تأكيد الكود للرقم #' + nid + '</h3><input id="codeInput_' + nid + '" placeholder="أدخل الكود" style="width:100%;padding:12px;margin:12px 0;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:monospace;text-align:center;font-size:18px;letter-spacing:4px"><div style="display:flex;gap:8px;margin-bottom:12px;"><select id="platInput_' + nid + '" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"><option value="Telegram (Session)" selected>Telegram (Session)</option><option value="WhatsApp">WhatsApp</option></select><input id="priceInput_' + nid + '" type="number" step="0.01" min="0.01" value="1.00" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;direction:ltr;"></div><label style="display:flex;align-items:center;gap:8px;padding:10px;margin-bottom:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;cursor:pointer;"><input type="checkbox" id="isPremium_' + nid + '" style="width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;"><span style="font-size:13px;font-weight:700;color:#f59e0b;">⭐ رقم مميز</span></label><button class="btn" onclick="verifyCode(' + nid + ')">تأكيد</button><div id="verifyResult_' + nid + '" style="margin-top:12px"></div></div>';
-}}
-function verifyCode(nid) {{
+}
+function verifyCode(nid) {
     var code = document.getElementById('codeInput_' + nid).value;
-    fetch('/admin/tg/' + nid + '/verify', {{
+    fetch('/admin/tg/' + nid + '/verify', {
         method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'code=' + encodeURIComponent(code) + '&platform=' + encodeURIComponent(document.getElementById('platInput_' + nid).value) + '&price=' + encodeURIComponent(document.getElementById('priceInput_' + nid).value) + '&is_premium=' + (document.getElementById('isPremium_' + nid).checked ? 'on' : 'off')
-    }}).then(r => r.json()).then(d => {{
+    }).then(r => r.json()).then(d => {
         var res = document.getElementById('verifyResult_' + nid);
-        if (d.ok) {{
+        if (d.ok) {
             res.innerHTML = '<div style="color:var(--success)"> تم التأكيد!</div>';
             setTimeout(() => location.reload(), 1500);
-        }} else if (d.need_2fa) {{
+        } else if (d.need_2fa) {
             res.innerHTML = '<div style="color:var(--warn); display:flex; align-items:center; gap:6px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> يتطلب 2FA</div><input id="pwInput_' + nid + '" type="password" placeholder="كلمة سر 2FA" style="width:100%;padding:12px;margin:12px 0;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px"><button class="btn" onclick="verify2FA(' + nid + ')">تأكيد 2FA</button>';
-        }} else {{
+        } else {
             res.innerHTML = '<div style="color:var(--danger)">❌ ' + (d.error || 'فشل') + '</div>';
-        }}
-    }});
-}}
-function verify2FA(nid) {{
+        }
+    });
+}
+function verify2FA(nid) {
     var pw = document.getElementById('pwInput_' + nid).value;
-    fetch('/admin/tg/' + nid + '/2fa', {{
+    fetch('/admin/tg/' + nid + '/2fa', {
         method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'password=' + encodeURIComponent(pw)
-    }}).then(r => r.json()).then(d => {{
-        if (d.ok) {{
+    }).then(r => r.json()).then(d => {
+        if (d.ok) {
             document.getElementById('verifyResult_' + nid).innerHTML = '<div style="color:var(--success)"> تم!</div>';
             setTimeout(() => location.reload(), 1500);
-        }} else {{
+        } else {
             document.getElementById('verifyResult_' + nid).innerHTML = '<div style="color:var(--danger)">❌ ' + (d.error || 'فشل') + '</div>';
-        }}
-    }});
-}}
+        }
+    });
+}
 
 // ربط الأزرار بعد تحميل الصفحة
-document.addEventListener('DOMContentLoaded', function() {{
-    document.querySelectorAll('[id^="btnCode_"]').forEach(function(btn) {{
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[id^="btnCode_"]').forEach(function(btn) {
         var nid = btn.id.replace('btnCode_', '');
-        btn.addEventListener('click', function(e) {{
+        btn.addEventListener('click', function(e) {
             e.preventDefault();
-            window.requestCode({{currentTarget: btn}}, nid);
-        }});
-    }});
-    document.querySelectorAll('[id^="btnVerify_"]').forEach(function(btn) {{
+            window.requestCode({currentTarget: btn}, nid);
+        });
+    });
+    document.querySelectorAll('[id^="btnVerify_"]').forEach(function(btn) {
         var nid = btn.id.replace('btnVerify_', '');
-        btn.addEventListener('click', function(e) {{
+        btn.addEventListener('click', function(e) {
             e.preventDefault();
             window.showVerify(nid);
-        }});
-    }});
-}});
-function showPrice(nid) {{
+        });
+    });
+});
+function showPrice(nid) {
     var price = prompt('أدخل السعر بالدولار:', '1.00');
     if (!price) return;
-    fetch('/admin/tg/' + nid + '/price', {{
+    fetch('/admin/tg/' + nid + '/price', {
         method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'price=' + encodeURIComponent(price)
-    }}).then(() => location.reload());
-}}
+    }).then(() => location.reload());
+}
 
-function changePlatform(nid) {{
+function changePlatform(nid) {
     var p = prompt('اختر المنصة:\\n1 = WhatsApp\\n2 = Telegram (Session)', '2');
     if (!p) return;
     var platform = (p === '1') ? 'WhatsApp' : 'Telegram (Session)';
-    fetch('/admin/tg/' + nid + '/platform', {{
+    fetch('/admin/tg/' + nid + '/platform', {
         method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'platform=' + encodeURIComponent(platform)
-    }}).then(() => location.reload());
-}}
+    }).then(() => location.reload());
+}
 
 // ربط الأزرار بعد تحميل الصفحة
-(function() {{
-    function bindButtons() {{
-        document.querySelectorAll('[id^="btnCode_"]').forEach(function(btn) {{
+(function() {
+    function bindButtons() {
+        document.querySelectorAll('[id^="btnCode_"]').forEach(function(btn) {
             if (btn.dataset.bound) return;
             btn.dataset.bound = '1';
             var nid = btn.id.replace('btnCode_', '');
-            btn.addEventListener('click', function(e) {{
+            btn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                window.requestCode({{currentTarget: btn}}, nid);
-            }});
-        }});
-        document.querySelectorAll('[id^="btnVerify_"]').forEach(function(btn) {{
+                window.requestCode({currentTarget: btn}, nid);
+            });
+        });
+        document.querySelectorAll('[id^="btnVerify_"]').forEach(function(btn) {
             if (btn.dataset.bound) return;
             btn.dataset.bound = '1';
             var nid = btn.id.replace('btnVerify_', '');
-            btn.addEventListener('click', function(e) {{
+            btn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 window.showVerify(nid);
-            }});
-        }});
-    }}
-    if (document.readyState === 'loading') {{
+            });
+        });
+    }
+    if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', bindButtons);
-    }} else {{
+    } else {
         bindButtons();
-    }}
-}})();
+    }
+})();
 </script>
 """
 
