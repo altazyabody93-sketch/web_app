@@ -1,6 +1,7 @@
 Flask==3.0.3
-flask-compress==1.17
-pywebpush==2.0.0
-cryptography==43.0.1
-Pillow==10.4.0
-cairosvg==2.7.1
+flask-compress
+pywebpush
+cryptography
+Pillow
+cairosvg
+telethon
