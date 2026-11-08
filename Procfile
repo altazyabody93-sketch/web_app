@@ -1,1 +1,1 @@
-web: python nem.py
+web: python web.py
