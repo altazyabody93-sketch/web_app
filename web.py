@@ -377,6 +377,14 @@ def seed_buy_prices():
 def init_db():
     con = sqlite3.connect(DB_PATH)
     con.executescript(SCHEMA)
+    # ترحيل: أعمدة الأرقام والإعلانات الناقصة (للقواعد القديمة)
+    _num_cols = [r[1] for r in con.execute("PRAGMA table_info(numbers)")]
+    for _c, _d in [("seen_by_buyer", "INTEGER DEFAULT 0"), ("request_time", "TEXT"), ("two_fa_password", "TEXT")]:
+        if _c not in _num_cols:
+            con.execute(f"ALTER TABLE numbers ADD COLUMN {_c} {_d}")
+    _ann_cols = [r[1] for r in con.execute("PRAGMA table_info(announcements)")]
+    if "icon_name" not in _ann_cols:
+        con.execute("ALTER TABLE announcements ADD COLUMN icon_name TEXT")
     # ترحيل: عمود is_read في رسائل التذاكر (للقواعد القديمة)
     _tm_cols = [r[1] for r in con.execute("PRAGMA table_info(ticket_messages)")]
     if "is_read" not in _tm_cols:
@@ -5154,6 +5162,18 @@ def admin_tg_unlist(nid):
 
 
 
+def _buy_mask_phone(phone):
+    """يخفي وسط الرقم في صفحة الشراء: أول رقمين + نجوم + آخر رقمين، مع قفل SVG."""
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if len(digits) < 5:
+        return "*****"
+    lock = ('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" '
+            'style="vertical-align:middle;margin:0 4px;"><rect x="4" y="11" width="16" height="10" rx="2"/>'
+            '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>')
+    return digits[:2] + "*****" + digits[-2:] + lock
+
+
 def mask_phone(phone):
     """يخفي وسط الرقم ويحط أيقونة قفل صغيرة (SVG)"""
     if not phone: return ""
@@ -5727,7 +5747,7 @@ def page(name, active="", **ctx):
           </div>
           
           <div style="font-family:monospace; font-size:14px; direction:ltr; text-align:left; color:var(--muted); margin-bottom:12px; background:rgba(0,0,0,0.2); padding:6px 10px; border-radius:8px; border:1px solid var(--border);">
-            {n["phone"]}
+            {_buy_mask_phone(n["phone"])}
           </div>
 
           {coupon_html}
