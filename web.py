@@ -257,8 +257,8 @@ DEFAULT_SETTINGS = {
     "EMAIL_ADDRESS": "", "EMAIL_PASSWORD": "",
     "IMAP_HOST": "imap.gmail.com", "IMAP_FOLDERS": "INBOX",
     "TG_API_ID": "22651991", "TG_API_HASH": "ecad214ecff6a5cd90fc141d4e32f597",
-    "BINANCE_API_KEY": "uUXk7MSdig69iJ7eCeEtlwIX6S21sZgD6miCL1PTUPTocV7gUyVBdehidsisy3r5",
-    "BINANCE_API_SECRET": "IIj3bi4RhaYoc9gtiGiMrqYFji5nyFSj4CWggUEXISfueG2bYYoBqSfcX40k9j7o",
+    "BINANCE_API_KEY": "OwzBspNyOTGHJDyc4dWs4IOUsWeI2545xRVbP6zlwREaFeyBiKGwrfcribztTvg2",
+    "BINANCE_API_SECRET": "myHSYz8sN0ptu0w7OGiuSo7LIT93OJNGQJClK1TySLFRU6wZNA8FOJNGj52HPAxT",
     "BINANCE_PAY_ID": "914222418",
     "JEEB_ACCOUNT": "1596606", "JEEB_RATE_YE": "540", "JEEB_RATE_SA": "3.75",
     "ONECASH_ACCOUNT": "148175861", "ONECASH_RATE_YE": "540", "ONECASH_RATE_SA": "3.75",
@@ -377,14 +377,6 @@ def seed_buy_prices():
 def init_db():
     con = sqlite3.connect(DB_PATH)
     con.executescript(SCHEMA)
-    # ترحيل: أعمدة الأرقام والإعلانات الناقصة (للقواعد القديمة)
-    _num_cols = [r[1] for r in con.execute("PRAGMA table_info(numbers)")]
-    for _c, _d in [("seen_by_buyer", "INTEGER DEFAULT 0"), ("request_time", "TEXT"), ("two_fa_password", "TEXT")]:
-        if _c not in _num_cols:
-            con.execute(f"ALTER TABLE numbers ADD COLUMN {_c} {_d}")
-    _ann_cols = [r[1] for r in con.execute("PRAGMA table_info(announcements)")]
-    if "icon_name" not in _ann_cols:
-        con.execute("ALTER TABLE announcements ADD COLUMN icon_name TEXT")
     # ترحيل: عمود is_read في رسائل التذاكر (للقواعد القديمة)
     _tm_cols = [r[1] for r in con.execute("PRAGMA table_info(ticket_messages)")]
     if "is_read" not in _tm_cols:
@@ -5162,18 +5154,6 @@ def admin_tg_unlist(nid):
 
 
 
-def _buy_mask_phone(phone):
-    """يخفي وسط الرقم في صفحة الشراء: أول رقمين + نجوم + آخر رقمين، مع قفل SVG."""
-    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
-    if len(digits) < 5:
-        return "*****"
-    lock = ('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-            'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" '
-            'style="vertical-align:middle;margin:0 4px;"><rect x="4" y="11" width="16" height="10" rx="2"/>'
-            '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>')
-    return digits[:2] + "*****" + digits[-2:] + lock
-
-
 def mask_phone(phone):
     """يخفي وسط الرقم ويحط أيقونة قفل صغيرة (SVG)"""
     if not phone: return ""
@@ -5747,7 +5727,7 @@ def page(name, active="", **ctx):
           </div>
           
           <div style="font-family:monospace; font-size:14px; direction:ltr; text-align:left; color:var(--muted); margin-bottom:12px; background:rgba(0,0,0,0.2); padding:6px 10px; border-radius:8px; border:1px solid var(--border);">
-            {_buy_mask_phone(n["phone"])}
+            {n["phone"]}
           </div>
 
           {coupon_html}
@@ -8277,6 +8257,100 @@ def icon():
 # ============================================================
 # التهيئة (بدون تشغيل تلقائي)
 # ============================================================
+
+# ============================================================
+# إصلاح تلقائي شامل للداتابيز (يشتغل مع كل تشغيل)
+# ============================================================
+def auto_fix_db():
+    """يتأكد من وجود كل الأعمدة والجداول اللي الكود محتاجها"""
+    con = sqlite3.connect(DB_PATH)
+    try:
+        # قائمة بكل الجداول والأعمدة المطلوبة
+        needed_columns = [
+            # (اسم الجدول، اسم العمود، تعريف العمود)
+            # جدول users
+            ("users", "avatar", "TEXT"),
+            ("users", "captcha_passed", "INTEGER DEFAULT 0"),
+            ("users", "last_bonus", "TEXT"),
+            ("users", "total_spent", "REAL DEFAULT 0"),
+            ("users", "bad_coupons", "INTEGER DEFAULT 0"),
+            ("users", "referral_earnings", "REAL DEFAULT 0.0"),
+            ("users", "custom_id", "TEXT"),
+            # جدول numbers
+            ("numbers", "seen_by_buyer", "INTEGER DEFAULT 0"),
+            ("numbers", "request_time", "TEXT"),
+            ("numbers", "two_fa_password", "TEXT"),
+            ("numbers", "is_premium", "INTEGER DEFAULT 0"),
+            ("numbers", "paid_price", "REAL"),
+            ("numbers", "session_string", "TEXT"),
+            ("numbers", "last_code", "TEXT"),
+            # جدول ticket_messages
+            ("ticket_messages", "is_read", "INTEGER DEFAULT 0"),
+            # جدول announcements
+            ("announcements", "text_color", "TEXT DEFAULT '#e8e8f5'"),
+            ("announcements", "font_size", "TEXT DEFAULT '15px'"),
+            ("announcements", "icon", "TEXT DEFAULT 'bell'"),
+            ("announcements", "icon_name", "TEXT DEFAULT 'bell'"),
+            ("announcements", "is_active", "INTEGER DEFAULT 1"),
+            # جدول buy_prices
+            ("buy_prices", "code", "TEXT DEFAULT ''"),
+            ("buy_prices", "flag", "TEXT DEFAULT ''"),
+        ]
+        
+        added = 0
+        for table, col, decl in needed_columns:
+            try:
+                # نتأكد إن الجدول موجود
+                cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+                if not cols:
+                    # الجدول مش موجود، نتخطاه
+                    continue
+                if col not in cols:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                    added += 1
+                    print(f"[AUTO-FIX] added {table}.{col}")
+            except sqlite3.OperationalError as e:
+                print(f"[AUTO-FIX] error on {table}.{col}: {e}")
+        
+        # إنشاء جداول ناقصة
+        con.execute("CREATE TABLE IF NOT EXISTS pending_sellers (number_id INTEGER, user_id INTEGER, created_at TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS pending_balance (user_id INTEGER, amount REAL, number_id INTEGER, created_at TEXT)")
+        
+        # التأكد من الأعمدة الناقصة في جدول settings
+        try:
+            cols = [r[1] for r in con.execute("PRAGMA table_info(settings)")]
+            if not cols:
+                con.execute("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)")
+        except:
+            pass
+        
+        # إضافة قيم افتراضية للإعدادات لو مش موجودة
+        default_settings = {
+            "WHEEL_ENABLED": "1",
+            "WHEEL_PRIZES": "0.01,0.05,0.10,0.02,0.00,0.05,0.01,0.20",
+            "WHEEL_MAX_SPINS": "1",
+            "WHEEL_MAX_PRIZE": "0.20",
+            "REWARD_MODE": "daily",
+            "DAILY_BONUS_ENABLED": "1",
+            "REFERRAL_ENABLED": "1",
+        }
+        for k, v in default_settings.items():
+            try:
+                con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
+            except:
+                pass
+        
+        con.commit()
+        if added > 0:
+            print(f"[AUTO-FIX] Fixed {added} columns successfully.")
+        else:
+            print("[AUTO-FIX] Database is up to date.")
+    except Exception as e:
+        print(f"[AUTO-FIX] Fatal error: {e}")
+    finally:
+        con.close()
+
+
 def run_migrations():
     """ترحيلات آمنة - بتتنفذ في كل تشغيل."""
     con = sqlite3.connect(DB_PATH)
@@ -8304,6 +8378,11 @@ def run_migrations():
     finally:
         con.close()
 
+
+try:
+    auto_fix_db()
+except Exception as e:
+    print(f"[AUTO-FIX] startup error: {e}")
 
 if not os.path.exists(DB_PATH):
     init_db()
@@ -8358,9 +8437,8 @@ def admin_test_email():
 def admin_test_binance():
     api_key = get_setting("BINANCE_API_KEY", "").strip()
     api_secret = get_setting("BINANCE_API_SECRET", "").strip()
-    print(f"[BINANCE TEST] Using Key: {api_key[:5]}...{api_key[-5:]}")
     if not api_key or not api_secret:
-        return jsonify({"ok": False, "error": "المفاتيح غير محفوظة"})
+        return jsonify({"ok": False, "error": "مفاتيح Binance غير محفوظة."})
     try:
         import hmac, hashlib, time, requests
         from urllib.parse import urlencode
@@ -8368,16 +8446,10 @@ def admin_test_binance():
         qs = urlencode(params)
         sig = hmac.new(api_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         url = "https://api.binance.com/api/v3/account?" + qs + "&signature=" + sig
-        # استخدام بروكسي لتجاوز الحظر الجغرافي من Binance على سيرفرات Render
-        proxies = {
-            "http": "http://185.199.229.156:7492",
-            "https": "http://185.199.229.156:7492"
-        }
-        res = requests.get(url, headers={"X-MBX-APIKEY": api_key}, proxies=proxies, timeout=20).json()
-        
+        res = requests.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=15).json()
         if res.get("accountType"):
             return jsonify({"ok": True, "msg": "تم الاتصال بنجاح! الحساب: " + str(res["accountType"])})
-        return jsonify({"ok": False, "error": f"{res.get('msg')} (كود: {res.get('code')})"})
+        return jsonify({"ok": False, "error": str(res.get("msg", "مفاتيح غير صالحة"))})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:100]})
 
