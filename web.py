@@ -257,8 +257,8 @@ DEFAULT_SETTINGS = {
     "EMAIL_ADDRESS": "", "EMAIL_PASSWORD": "",
     "IMAP_HOST": "imap.gmail.com", "IMAP_FOLDERS": "INBOX",
     "TG_API_ID": "22651991", "TG_API_HASH": "ecad214ecff6a5cd90fc141d4e32f597",
-    "BINANCE_API_KEY": "",
-    "BINANCE_API_SECRET": "",
+    "BINANCE_API_KEY": "uUXk7MSdig69iJ7eCeEtlwIX6S21sZgD6miCL1PTUPTocV7gUyVBdehidsisy3r5",
+    "BINANCE_API_SECRET": "IIj3bi4RhaYoc9gtiGiMrqYFji5nyFSj4CWggUEXISfueG2bYYoBqSfcX40k9j7o",
     "BINANCE_PAY_ID": "914222418",
     "JEEB_ACCOUNT": "1596606", "JEEB_RATE_YE": "540", "JEEB_RATE_SA": "3.75",
     "ONECASH_ACCOUNT": "148175861", "ONECASH_RATE_YE": "540", "ONECASH_RATE_SA": "3.75",
@@ -2817,67 +2817,39 @@ def store():
                 page_n=pn, total_pages=total_pages, total=total)
 
 
-def binance_find_tx(order_id):
-    """يرجع (ok, msg, amount) ويبحث عن Order ID في آخر عمليات Binance Pay"""
-    import hmac, hashlib, time, requests
-    from urllib.parse import urlencode
-    api_key = (get_setting("BINANCE_API_KEY", "") or "").strip()
-    api_secret = (get_setting("BINANCE_API_SECRET", "") or "").strip()
-    if not api_key or not api_secret:
-        return False, "مفاتيح Binance غير مهيأة في الإعدادات.", 0.0
-    try:
-        params = {"timestamp": int(time.time() * 1000), "recvWindow": 10000, "limit": 100}
-        qs = urlencode(params)
-        sig = hmac.new(api_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
-        url = "https://api.binance.com/sapi/v1/pay/transactions?" + qs + "&signature=" + sig
-        r = requests.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=20)
-        try:
-            res = r.json()
-        except Exception:
-            return False, "Binance رد بشكل غير متوقع (HTTP %s)." % r.status_code, 0.0
-        if not isinstance(res, dict) or not res.get("success"):
-            msg = res.get("msg") or res.get("message") or "" if isinstance(res, dict) else ""
-            return False, "خطأ Binance: " + str(msg), 0.0
-        for tx in res.get("data", []) or []:
-            if str(tx.get("orderId", "")).strip() == str(order_id).strip():
-                return True, "تم التحقق بنجاح!", float(tx.get("amount", 0) or 0)
-        return False, "لم يتم العثور على Order ID بين آخر 100 عملية.", 0.0
-    except requests.exceptions.Timeout:
-        return False, "انتهت مهلة الاتصال بـ Binance.", 0.0
-    except Exception as e:
-        return False, "خطأ تقني: " + str(e)[:120], 0.0
-
-
 @app.route("/deposit/binance_verify", methods=["POST"])
 @login_required
 def deposit_binance_verify():
     u = current_user()
-    order_id = (request.form.get("order_id", "") or "").strip()
     try:
-        typed_amt = float(request.form.get("amount", "0") or 0)
-    except ValueError:
-        typed_amt = 0.0
+        amt = float(request.form.get("amount", "0"))
+        order_id = request.form.get("order_id", "").strip()
+    except:
+        flash("بيانات غير صالحة", "error"); return redirect(url_for("deposit", method="binance"))
+    
+    if amt < 0.1:
+        flash("الحد الأدنى $0.10", "error"); return redirect(url_for("deposit", method="binance"))
     if not order_id:
-        flash("رقم العملية (Order ID) مطلوب.", "error")
-        return redirect(url_for("deposit", method="binance"))
-    used = db().execute("SELECT 1 FROM deposits WHERE method='binance' AND trans_id=? AND status='approved'",
-                        (order_id,)).fetchone()
-    if used:
-        flash("هذا Order ID مستخدم سابقاً.", "error")
-        return redirect(url_for("dashboard"))
-    ok, msg, real_amt = binance_find_tx(order_id)
-    if ok and real_amt >= 0.10:
+        flash("رقم العملية (Order ID) مطلوب.", "error"); return redirect(url_for("deposit", method="binance"))
+    
+    # التحقق التلقائي
+    ok, msg = binance_auto_verify(order_id, amt)
+    
+    if ok:
+        # إضافة الرصيد تلقائياً
         db().execute("INSERT INTO deposits(user_id,method,amount_usd,status,trans_id) VALUES(?,?,?,'approved',?)",
-                     (u["user_id"], "binance", real_amt, order_id))
-        db().execute("UPDATE users SET balance=balance+? WHERE user_id=?", (real_amt, u["user_id"]))
+                     (u["user_id"], "binance", amt, order_id))
+        db().execute("UPDATE users SET balance=balance+? WHERE user_id=?", (amt, u["user_id"]))
         db().commit()
-        flash("تم تأكيد الدفع وإضافة $" + ("%.2f" % real_amt) + " تلقائياً!", "success")
+        flash("تم تأكيد الدفع وإضافة الرصيد تلقائياً!", "success")
         return redirect(url_for("dashboard"))
-    db().execute("INSERT INTO deposits(user_id,method,amount_usd,status,trans_id) VALUES(?,?,?,'pending',?)",
-                 (u["user_id"], "binance", typed_amt, order_id))
-    db().commit()
-    flash("لم يتم التحقق التلقائي: " + msg + " - تم إرسال طلبك للإدارة.", "error")
-    return redirect(url_for("dashboard"))
+    else:
+        # إذا فشل التحقق، نرسل طلب للإدارة للمراجعة
+        db().execute("INSERT INTO deposits(user_id,method,amount_usd,status,trans_id) VALUES(?,?,?,'pending',?)",
+                     (u["user_id"], "binance", amt, order_id))
+        db().commit()
+        flash("لم يتم التحقق التلقائي: " + msg + " - تم إرسال طلبك للإدارة.", "error")
+        return redirect(url_for("dashboard"))
 
 
 import shutil, zipfile
@@ -7770,30 +7742,35 @@ def page(name, active="", **ctx):
         parts.append('</script>')
         
         # إضافة كود JavaScript للفحص مباشرة في الـ body
-        parts.append("""<script>
-function testConnection(url, btn, resultId) {
-  var originalHtml = btn.innerHTML;
-  var res = document.getElementById(resultId);
-  btn.innerHTML = "جاري الفحص...";
-  btn.disabled = true;
-  if (res) res.innerHTML = "جاري فحص الاتصال...";
-  fetch(url, {credentials: "same-origin"})
-    .then(function(r){ return r.text().then(function(t){
-      try { return JSON.parse(t); }
-      catch(e) { throw new Error("الرد ليس JSON (HTTP " + r.status + "): " + t.slice(0,80)); }
-    }); })
-    .then(function(d){
-      btn.innerHTML = originalHtml; btn.disabled = false;
-      if (res) res.innerHTML = d.ok
-        ? "<span style='color:var(--success);font-weight:bold'>&#10003; " + d.msg + "</span>"
-        : "<span style='color:var(--danger);font-weight:bold'>&#10007; " + d.error + "</span>";
-    })
-    .catch(function(e){
-      btn.innerHTML = originalHtml; btn.disabled = false;
-      if (res) res.innerHTML = "<span style='color:var(--danger)'>خطأ في الاتصال: " + e.message + "</span>";
-    });
-}
-</script>""")
+        parts.append("""
+<script>
+function testConnection(url, btn, resultId) {{
+    var originalHtml = btn.innerHTML;
+    btn.innerHTML = "جاري الفحص...";
+    btn.disabled = true;
+    var res = document.getElementById(resultId);
+    if (res) res.innerHTML = "جاري فحص الاتصال...";
+    fetch(url)
+        .then(function(r){{ return r.json(); }})
+        .then(function(d){{
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            if (res) {{
+                if (d.ok) {{
+                    res.innerHTML = "<span style='color:var(--success);font-weight:bold'>✓ " + d.msg + "</span>";
+                }} else {{
+                    res.innerHTML = "<span style='color:var(--danger);font-weight:bold'>✗ " + d.error + "</span>";
+                }}
+            }}
+        }})
+        .catch(function(e){{
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            if (res) res.innerHTML = "<span style='color:var(--danger)'>خطأ في الاتصال: " + e.message + "</span>";
+        }});
+}}
+</script>
+""")
         parts.append('''
         <script>
         function toggleEye(btn) {{
@@ -8379,31 +8356,25 @@ def admin_test_email():
 @app.route("/admin/test_binance")
 @admin_required
 def admin_test_binance():
-    import hmac, hashlib, time, requests
-    from urllib.parse import urlencode
-    api_key = (get_setting("BINANCE_API_KEY", "") or "").strip()
-    api_secret = (get_setting("BINANCE_API_SECRET", "") or "").strip()
+    api_key = get_setting("BINANCE_API_KEY", "").strip()
+    api_secret = get_setting("BINANCE_API_SECRET", "").strip()
+    print(f"[BINANCE TEST] Using Key: {api_key[:5]}...{api_key[-5:]}")
     if not api_key or not api_secret:
-        return jsonify({"ok": False, "error": "مفاتيح Binance غير محفوظة."})
+        return jsonify({"ok": False, "error": "المفاتيح غير محفوظة"})
     try:
-        params = {"timestamp": int(time.time() * 1000), "recvWindow": 10000}
+        import hmac, hashlib, time, requests
+        from urllib.parse import urlencode
+        params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
         qs = urlencode(params)
         sig = hmac.new(api_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         url = "https://api.binance.com/api/v3/account?" + qs + "&signature=" + sig
-        r = requests.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=20)
-        try:
-            res = r.json()
-        except Exception:
-            return jsonify({"ok": False, "error": "Binance رد بشكل غير JSON (HTTP %s): %s" % (r.status_code, r.text[:120])})
-        if not isinstance(res, dict):
-            return jsonify({"ok": False, "error": "رد غير متوقع من Binance."})
+        res = requests.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=15).json()
+        
         if res.get("accountType"):
             return jsonify({"ok": True, "msg": "تم الاتصال بنجاح! الحساب: " + str(res["accountType"])})
-        return jsonify({"ok": False, "error": "Binance [%s]: %s" % (res.get("code", "?"), res.get("msg", "مفاتيح غير صالحة"))})
-    except requests.exceptions.Timeout:
-        return jsonify({"ok": False, "error": "انتهت مهلة الاتصال بـ Binance (السيرفر بطيء أو محجوب)."})
+        return jsonify({"ok": False, "error": f"{res.get('msg')} (كود: {res.get('code')})"})
     except Exception as e:
-        return jsonify({"ok": False, "error": type(e).__name__ + ": " + str(e)[:150]})
+        return jsonify({"ok": False, "error": str(e)[:100]})
 
 
 @app.route("/check-otp/<int:nid>", methods=["POST"])
