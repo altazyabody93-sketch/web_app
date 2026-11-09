@@ -8368,7 +8368,12 @@ def admin_test_binance():
         qs = urlencode(params)
         sig = hmac.new(api_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         url = "https://api.binance.com/api/v3/account?" + qs + "&signature=" + sig
-        res = requests.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=15).json()
+        # استخدام بروكسي لتجاوز الحظر الجغرافي من Binance على سيرفرات Render
+        proxies = {
+            "http": "http://185.199.229.156:7492",
+            "https": "http://185.199.229.156:7492"
+        }
+        res = requests.get(url, headers={"X-MBX-APIKEY": api_key}, proxies=proxies, timeout=20).json()
         
         if res.get("accountType"):
             return jsonify({"ok": True, "msg": "تم الاتصال بنجاح! الحساب: " + str(res["accountType"])})
