@@ -2998,15 +2998,68 @@ def admin_backup_restore():
                 <b>⚠️ تحذير هام:</b><br>
                 استعادة نسخة احتياطية سيقوم بمسح <b>جميع البيانات الحالية</b> (المستخدمين، الأرقام، الرصيد، الإعدادات) واستبدالها بالبيانات الموجودة في الملف المرفوع. لا يمكن التراجع عن هذه العملية!
             </div>
-            <form method="POST" enctype="multipart/form-data">
+            <form method="POST" enctype="multipart/form-data" id="restoreForm" onsubmit="return handleRestore(event)">
                 <div class="field">
                     <label>ملف النسخة الاحتياطية (ZIP)</label>
-                    <input type="file" name="backup_file" accept=".zip" required style="padding:12px; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:10px; width:100%;">
+                    <input type="file" name="backup_file" id="backupFileInput" accept=".zip" required style="padding:12px; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:10px; width:100%;">
                 </div>
-                <button class="form-btn" style="background:var(--danger);" onclick="return confirm('هل أنت متأكد؟ سيتم استبدال كل البيانات الحالية!');">استعادة النسخة الآن</button>
+                <button class="form-btn" id="restoreBtn" style="background:var(--danger);">استعادة النسخة الآن</button>
             </form>
+            
+            <div id="restoreProgressBox" style="display:none; margin-top:20px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px; color:var(--text);">
+                    <span>جاري رفع الملف...</span>
+                    <span id="restorePct">0%</span>
+                </div>
+                <div style="height:12px; background:var(--bg2); border-radius:999px; overflow:hidden; border:1px solid var(--border);">
+                    <div id="restoreBar" style="height:100%; width:0%; background:linear-gradient(90deg, #6366f1, #06b6d4); border-radius:999px; transition:width 0.2s;"></div>
+                </div>
+                <div style="margin-top:8px; font-size:12px; color:var(--muted); text-align:center;">
+                    <span id="restoreSize">0.00 MB</span> / <span id="restoreTotal">0.00 MB</span>
+                </div>
+            </div>
         </div>
     </div>'''
+    body += '''
+    <script>
+    function handleRestore(e) {
+        e.preventDefault();
+        var fileInput = document.getElementById("backupFileInput");
+        if (!fileInput.files.length) { alert("اختر ملف"); return false; }
+        var file = fileInput.files[0];
+        if (!confirm("هل أنت متأكد؟ سيتم استبدال البيانات!")) return false;
+        document.getElementById("restoreProgressBox").style.display = "block";
+        document.getElementById("restoreTotal").textContent = (file.size / 1048576).toFixed(2) + " MB";
+        document.getElementById("restoreBtn").disabled = true;
+        document.getElementById("restoreBtn").textContent = "جاري الرفع...";
+        var formData = new FormData();
+        formData.append("backup_file", file);
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/admin/backup/restore", true);
+        xhr.upload.onprogress = function(ev) {
+            if (ev.lengthComputable) {
+                var pct = Math.round((ev.loaded / ev.total) * 100);
+                document.getElementById("restorePct").textContent = pct + "%";
+                document.getElementById("restoreBar").style.width = pct + "%";
+                document.getElementById("restoreSize").textContent = (ev.loaded / 1048576).toFixed(2) + " MB";
+            }
+        };
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                document.getElementById("restoreBar").style.width = "100%";
+                document.getElementById("restorePct").textContent = "100%";
+                setTimeout(function() { window.location.href = "/admin/settings"; }, 1500);
+            } else {
+                alert("فشل الرفع");
+                document.getElementById("restoreBtn").disabled = false;
+                document.getElementById("restoreBtn").textContent = "استعادة النسخة الآن";
+            }
+        };
+        xhr.send(formData);
+        return false;
+    }
+    </script>
+    '''
     return page("admin_backup_restore", body=body)
 
 
@@ -3221,6 +3274,69 @@ def admin_settings():
     return page("admin_settings", s=all_settings())
 
 
+
+
+
+@app.route("/admin/user/<int:uid>/credentials")
+@admin_required
+def admin_user_credentials(uid):
+    user_data = db().execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
+    if not user_data:
+        flash("المستخدم غير موجود", "error")
+        return redirect(url_for("admin_users"))
+    body = (
+        '<div class="container" style="max-width:500px; padding-top:20px;">'
+        '<div class="section-title" style="text-align:center;margin-bottom:20px;">بيانات الدخول</div>'
+        '<div class="card" style="padding:20px;">'
+        '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">'
+        '<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">اسم المستخدم</div>'
+        '<div style="display:flex;align-items:center;gap:10px;">'
+        '<span style="font-family:monospace;font-size:18px;color:var(--text);flex:1;">' + esc(user_data["username"]) + '</span>'
+        '<button onclick="copyText(\'' + esc(user_data["username"]) + '\', this)" class="btn btn-sm" style="padding:8px 12px;background:var(--primary2);color:#fff;font-size:12px;">نسخ</button>'
+        '</div></div>'
+        '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">'
+        '<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">آيدي التحويل</div>'
+        '<div style="display:flex;align-items:center;gap:10px;">'
+        '<span style="font-family:monospace;font-size:18px;color:var(--primary2);flex:1;">' + str(user_data["custom_id"] or user_data["user_id"]) + '</span>'
+        '<button onclick="copyText(\'' + str(user_data["custom_id"] or user_data["user_id"]) + '\', this)" class="btn btn-sm" style="padding:8px 12px;background:var(--primary2);color:#fff;font-size:12px;">نسخ</button>'
+        '</div></div>'
+        '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:24px;">'
+        '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">كلمة المرور</div>'
+        '<form method="POST" action="/admin/user/' + str(uid) + '/reset_pass">'
+        '<button type="submit" class="btn" style="width:100%;padding:12px;background:var(--warn);color:#fff;font-size:14px;" onclick="return confirm(\'توليد باسورد جديدة؟\');">توليد كلمة مرور جديدة</button>'
+        '</form></div>'
+        '<a href="/admin/users" class="btn btn-ghost" style="width:100%;padding:12px;">رجوع</a>'
+        '</div></div>'
+    )
+    return page("admin_creds", body=body)
+
+@app.route("/admin/user/<int:uid>/reset_pass", methods=["POST"])
+@admin_required
+def admin_user_reset_pass(uid):
+    from werkzeug.security import generate_password_hash
+    import secrets, string
+    new_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(10))
+    db().execute("UPDATE users SET password_hash=? WHERE user_id=?", (generate_password_hash(new_pass), uid))
+    db().commit()
+    flash("تم توليد كلمة المرور: " + new_pass, "success")
+    return redirect(url_for("admin_user_credentials", uid=uid))
+
+@app.route("/admin/user/<int:uid>/delete", methods=["POST"])
+@admin_required
+def admin_user_delete(uid):
+    if uid == session.get("user_id"):
+        flash("لا يمكنك حذف حسابك!", "error")
+        return redirect(url_for("admin_users"))
+    try:
+        db().execute("DELETE FROM users WHERE user_id=?", (uid,))
+        db().execute("UPDATE numbers SET status='available', buyer_id=NULL, sold_at=NULL WHERE buyer_id=?", (uid,))
+        db().execute("DELETE FROM tickets WHERE user_id=?", (uid,))
+        db().execute("DELETE FROM pending_balance WHERE user_id=?", (uid,))
+        db().commit()
+        flash("تم حذف المستخدم وإرجاع أرقامه.", "success")
+    except Exception as e:
+        flash("خطأ: " + str(e), "error")
+    return redirect(url_for("admin_users"))
 
 @app.route("/admin/users")
 @admin_required
@@ -7789,18 +7905,67 @@ function testConnection(url, btn, resultId) {{
 
     elif name == "admin_users":
         us = ctx["users"]
-        rows = ""
+        cards_html = ""
         for x in us:
             cap_status = ico("check", 14) if (x["captcha_passed"] if "captcha_passed" in x.keys() else 0) else ico("clock", 14)
-            rows += f'''<tr><td>#{x["user_id"]}</td><td>{x["username"]}</td><td>{x["email"]}</td><td style="direction:ltr;text-align:left">${x["balance"]:.2f}</td><td>{'أدمن' if x["is_admin"] else '-'}</td><td>{'محظور' if x["is_banned"] else 'نشط'}</td><td>{cap_status}</td>
-            <td><form method="POST" action="/admin/user/{x["user_id"]}/balance" style="display:inline"><input name="amount" type="number" step="0.01" placeholder="+/-" style="width:70px;padding:6px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px"><button class="btn btn-sm" style="padding:6px 10px;font-size:11px">تعديل</button></form>
-            <form method="POST" action="/admin/user/{x["user_id"]}/action" style="display:inline;margin-right:6px"><button name="action" value="{'unban' if x["is_banned"] else 'ban'}" class="btn btn-sm" style="background:var(--danger);padding:6px 10px;font-size:11px">{'إلغاء' if x["is_banned"] else 'حظر'}</button></form></td></tr>'''
-        body = f'''
-        <div class="container"><div class="section-title">المستخدمون <span class="section-sub">({len(us)})</span></div>
-          <a href="/admin" class="btn btn-ghost btn-sm" style="margin-bottom:20px">{ico("arrow-left", 14)} رجوع</a>
-          <div class="table-wrap"><table class="table"><tr><th>#</th><th>المستخدم</th><th>الإيميل</th><th>الرصيد</th><th>أدمن</th><th>الحالة</th><th>كابتشا</th><th>إجراءات</th></tr>{rows or '<tr><td colspan="8" style="text-align:center;color:var(--muted)">لا مستخدمين</td></tr>'}</table></div>
-        </div>'''
-
+            is_adm = "<span style='background:var(--warn);color:#000;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:900'>أدمن</span>" if x["is_admin"] else ""
+            is_banned = x["is_banned"]
+            status_badge = "<span style='background:rgba(239,68,68,0.15);color:var(--danger);padding:4px 10px;border-radius:8px;font-size:11px;font-weight:800'>محظور</span>" if is_banned else "<span style='background:rgba(16,185,129,0.15);color:var(--success);padding:4px 10px;border-radius:8px;font-size:11px;font-weight:800'>نشط</span>"
+            uid_val = x["user_id"]
+            uname = esc(x["username"])
+            cid = esc(x["custom_id"] or x["user_id"])
+            cards_html += (
+                '<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;margin-bottom:16px;overflow:hidden;">'
+                '<div style="padding:16px;border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">'
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+                '<div style="font-size:16px;font-weight:900;color:var(--text);display:flex;align-items:center;gap:6px;">' + uname + ' ' + is_adm + '</div>'
+                + status_badge +
+                '</div>'
+                '<div style="font-size:12px;color:var(--muted);font-family:monospace;direction:ltr;text-align:left;margin-bottom:6px;">' + esc(x["email"]) + '</div>'
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);">'
+                '<span>الآيدي: <span style="background:rgba(99,102,241,0.15);color:var(--primary2);padding:2px 8px;border-radius:6px;font-family:monospace;font-weight:900;letter-spacing:1px;">' + cid + '</span></span>'
+                '<button onclick="copyText(\'' + cid + '\', this)" class="copy-btn-inline" style="padding:3px 6px;font-size:10px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text);cursor:pointer;display:flex;align-items:center;">'
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+                '</button>'
+                '</div>'
+                '<div style="font-size:11px;color:var(--muted);">كابتشا: ' + cap_status + '</div>'
+                '</div>'
+                '</div>'
+                '<div style="padding:16px;">'
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;background:var(--bg2);padding:12px;border-radius:12px;border:1px solid var(--border);">'
+                '<div style="font-size:12px;color:var(--muted);font-weight:700;">الرصيد الحالي</div>'
+                '<div style="font-size:20px;font-weight:900;color:var(--success);direction:ltr;">$' + f'{x["balance"]:.2f}' + '</div>'
+                '</div>'
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+                '<form method="POST" action="/admin/user/' + str(uid_val) + '/balance" style="display:flex;gap:6px;flex:1;min-width:140px;margin:0;">'
+                '<input name="amount" type="number" step="0.01" placeholder="+/- مبلغ" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:12px;text-align:center;width:100%;">'
+                '<button class="btn" style="padding:8px 12px;font-size:12px;background:var(--primary2);">تعديل</button>'
+                '</form>'
+                '<form method="POST" action="/admin/user/' + str(uid_val) + '/action" style="margin:0;">'
+                '<button name="action" value="' + ('unban' if is_banned else 'ban') + '" class="btn" style="padding:10px 16px;font-size:12px;background:' + ('var(--success)' if is_banned else 'var(--danger)') + ';height:100%;">' + ('إلغاء الحظر' if is_banned else 'حظر') + '</button>'
+                '</form>'
+                '<a href="/admin/user/' + str(uid_val) + '/credentials" class="btn" style="padding:10px 16px;font-size:12px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:var(--primary2);height:100%;display:flex;align-items:center;justify-content:center;">'
+                + ico("key", 16) +
+                '</a>'
+                '<form method="POST" action="/admin/user/' + str(uid_val) + '/delete" style="margin:0;" onsubmit="return confirm(\'حذف المستخدم نهائياً؟\');">'
+                '<button class="btn" style="padding:10px 16px;font-size:12px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:var(--danger);height:100%;display:flex;align-items:center;justify-content:center;">'
+                + ico("trash", 16) +
+                '</button>'
+                '</form>'
+                '</div>'
+                '</div>'
+                '</div>'
+            )
+        body = (
+            '<div class="container" style="max-width:700px;">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
+            '<div class="section-title" style="margin:0;">المستخدمون <span class="section-sub">(' + str(len(us)) + ')</span></div>'
+            '<a href="/admin" class="btn btn-ghost btn-sm">' + ico("arrow-left", 14) + ' رجوع</a>'
+            '</div>'
+            + (cards_html if cards_html else '<div class="empty">لا يوجد مستخدمين</div>') +
+            '</div>'
+        )
     elif name == "admin_numbers":
         nums = ctx["numbers"]
         rows = ""
@@ -8353,6 +8518,7 @@ def auto_fix_db():
 
 def run_migrations():
     """ترحيلات آمنة - بتتنفذ في كل تشغيل."""
+    auto_fix_db()
     con = sqlite3.connect(DB_PATH)
     try:
         needed = [
@@ -8378,6 +8544,11 @@ def run_migrations():
     finally:
         con.close()
 
+
+try:
+    auto_fix_db()
+except Exception as e:
+    print(f"[AUTO-FIX] startup error: {e}")
 
 try:
     auto_fix_db()
