@@ -2701,10 +2701,14 @@ def my_delete_number(nid):
 # مراقبة الأكواد
 # ============================================================
 def log_code(user_id, number_id, phone, code, platform):
+    """تسجيل مستقل بذاته - بيفتح اتصال خاص بيه عشان ميقعش مع g.db"""
     try:
-        db().execute("INSERT INTO code_logs(user_id, number_id, phone, code, platform, created_at) VALUES(?,?,?,?,?,datetime('now'))",
-            (user_id, number_id, phone, code, platform))
-        db().commit()
+        con = sqlite3.connect(DB_PATH, timeout=30)
+        con.execute("CREATE TABLE IF NOT EXISTS code_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, number_id INTEGER, phone TEXT, code TEXT, platform TEXT, created_at TEXT DEFAULT (datetime('now')))")
+        con.execute("INSERT INTO code_logs(user_id, number_id, phone, code, platform, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                    (user_id, number_id, phone, code, platform))
+        con.commit()
+        con.close()
     except Exception as e:
         print("[CODE-LOG] error: " + str(e))
 
