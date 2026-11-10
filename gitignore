@@ -1,0 +1,12 @@
+*.db
+*.db.old
+*.db-journal
+*.db-wal
+*.db-shm
+backups/
+__pycache__/
+*.pyc
+.env
+*.zip
+temp_restore.zip
+pre_restore_*.db

@@ -1,7 +1,5 @@
-Flask
-flask-compress
-pywebpush
-cryptography
-Pillow
-cairosvg
-telethon
+Flask==3.0.0
+Werkzeug==3.0.1
+markupsafe==2.1.3
+telethon==1.34.0
+requests==2.31.0

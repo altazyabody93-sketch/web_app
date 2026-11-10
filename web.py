@@ -6822,7 +6822,7 @@ def page(name, active="", **ctx):
               <div class="register-logo-wrap">
                 <div class="register-logo" style="background: transparent; border: none; box-shadow: none; overflow: visible; position: relative;">
                   <div style="mix-blend-mode: screen; filter: contrast(1.2) brightness(1.1); display: inline-block;">
-                    {site_icon("site_logo", 150, '''<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>''')}
+                    {site_icon("site_logo", 150, '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>')}
                   </div>
                   
                 </div>
@@ -7140,7 +7140,7 @@ def page(name, active="", **ctx):
               <div class="login-logo-wrap">
                 <div class="login-logo" style="background: transparent; border: none; box-shadow: none; overflow: visible; position: relative;">
                   <div style="mix-blend-mode: screen; filter: contrast(1.2) brightness(1.1); display: inline-block;">
-                    {site_icon("site_logo", 150, '''<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>''')}
+                    {site_icon("site_logo", 150, '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>')}
                   </div>
                   
                 </div>
