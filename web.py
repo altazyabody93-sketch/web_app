@@ -10,23 +10,81 @@ from flask import (Flask, request, redirect, url_for, session, flash,
                    g, abort, get_flashed_messages, jsonify, Response)
 from werkzeug.security import generate_password_hash, check_password_hash
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH  = os.path.join(BASE_DIR, "matari.db")
-SECRET   = os.environ.get("MATARI_SECRET", "CHANGE_ME_IN_PRODUCTION_" + secrets.token_hex(8))
+# ---------- المسارات والإعدادات (مرتبطة بمجلد الملف، آمنة على Render) ----------
+import logging
+from logging.handlers import RotatingFileHandler
+from werkzeug.exceptions import HTTPException
 
-app = Flask(__name__)
-SECRET = os.environ.get("MATARI_SECRET", "efd88e532ef5f8b64bc6d5ff0df508226d955a0c72115d6143f8b5e271beb9fa")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# على Render ممكن تحط قاعدة البيانات على Disk دائم عبر MATARI_DB_PATH (مثال: /var/data/matari.db)
+DB_PATH = os.environ.get("MATARI_DB_PATH") or os.path.join(BASE_DIR, "matari.db")
+# المنفذ: Render يحدد PORT تلقائياً، وكود التشغيل المحلي يستخدم 5000
+PORT = int(os.environ.get("PORT", 5000))
+# كلمة سر الأدمن الافتراضية - يفضل تغييرها من متغيرات البيئة
+ADMIN_DEFAULT_PASSWORD = os.environ.get("MATARI_ADMIN_PASSWORD", "733723953")
+
+# ---------- نظام التسجيل (Logging): يطبع في stdout (يظهر في Logs على Render) ويكتب app.log ----------
+LOG_PATH = os.path.join(BASE_DIR, "app.log")
+log = logging.getLogger("matari")
+log.setLevel(logging.INFO)
+if not log.handlers:
+    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    _sh = logging.StreamHandler()
+    _sh.setFormatter(_fmt)
+    log.addHandler(_sh)
+    try:
+        _fh = RotatingFileHandler(LOG_PATH, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        _fh.setFormatter(_fmt)
+        log.addHandler(_fh)
+    except Exception:
+        pass  # لو الملف غير قابل للكتابة نكتفي بـ stdout
+
+def _load_secret():
+    """مفتاح الجلسات: من متغير البيئة MATARI_SECRET (الموصى به).
+    تم حذف المفتاح الثابت القديم لأنه كان ظاهراً في الكود (ثغرة أمنية)."""
+    env_secret = os.environ.get("MATARI_SECRET")
+    if env_secret:
+        return env_secret
+    key_file = os.path.join(BASE_DIR, ".secret_key")
+    try:
+        if os.path.exists(key_file):
+            with open(key_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        k = secrets.token_hex(32)
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write(k)
+        return k
+    except Exception as e:
+        log.warning("تعذر حفظ مفتاح الجلسات: %s", e)
+        return secrets.token_hex(32)
+
+SECRET = _load_secret()
+
+app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"), static_url_path="/static")
 app.secret_key = SECRET
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = 2592000  # 30 days
 
+@app.errorhandler(Exception)
+def _handle_unexpected_error(e):
+    """أي خطأ غير متوقع يتسجل في الـ Logs ويرجع صفحة بديلة بدل 502/انهيار."""
+    if isinstance(e, HTTPException):
+        return e  # 404 و 403 ... تبقى كما هي
+    log.exception("Unhandled error: %s", e)
+    return ("<div dir='rtl' style='font-family:sans-serif;padding:40px;text-align:center'>"
+            "<h2>حدث خطأ مؤقت</h2><p>حاول مرة أخرى بعد قليل.</p>"
+            "<a href='/'>الرجوع للرئيسية</a></div>"), 500
+
 def db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
+        g.db = sqlite3.connect(DB_PATH, timeout=30)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
-        g.db.execute("PRAGMA journal_mode = WAL")
+        try:
+            g.db.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.OperationalError as e:
+            log.warning("WAL غير متاح: %s", e)
     return g.db
 
 @app.teardown_appcontext
@@ -335,7 +393,7 @@ DEFAULT_BUY_PRICES = [
 
 def seed_buy_prices():
     """يزرع الدول الافتراضية في جدول buy_prices لو مش موجودة"""
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     try:
         # تأكد من وجود الجدول
@@ -375,7 +433,7 @@ def seed_buy_prices():
         con.close()
 
 def init_db():
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=30)
     con.executescript(SCHEMA)
     # ترحيل: عمود is_read في رسائل التذاكر (للقواعد القديمة)
     _tm_cols = [r[1] for r in con.execute("PRAGMA table_info(ticket_messages)")]
@@ -413,7 +471,7 @@ def init_db():
     if not con.execute("SELECT 1 FROM users WHERE is_admin=1 LIMIT 1").fetchone():
         con.execute(
             "INSERT INTO users(username,email,password_hash,recovery_key,is_admin,captcha_passed) VALUES(?,?,?,?,1,1)",
-            ("admin", "admin@matari.local", generate_password_hash("733723953"),
+            ("admin", "admin@matari.local", generate_password_hash(ADMIN_DEFAULT_PASSWORD),
              "AT-" + secrets.token_hex(6).upper()))
     con.commit(); con.close()
 
@@ -841,7 +899,7 @@ def delete_site_icon(name):
     row = db().execute("SELECT filename FROM site_icons WHERE name=?", (name,)).fetchone()
     if row and row["filename"]:
         try:
-            _os.remove(_os.path.join("static", "icons", row["filename"]))
+            _os.remove(_os.path.join(BASE_DIR, "static", "icons", row["filename"]))
         except Exception:
             pass
     db().execute("DELETE FROM site_icons WHERE name=?", (name,))
@@ -3060,17 +3118,18 @@ def admin_backup_download():
         
         with zipfile.ZipFile(backup_filename, "w", zipfile.ZIP_DEFLATED) as zf:
             # إضافة قاعدة البيانات
-            if os.path.exists("matari.db"):
-                zf.write("matari.db", "matari.db")
+            if os.path.exists(DB_PATH):
+                zf.write(DB_PATH, "matari.db")
             # إضافة ملف web.py
-            if os.path.exists("web.py"):
-                zf.write("web.py", "web.py")
+            if os.path.exists(os.path.join(BASE_DIR, "web.py")):
+                zf.write(os.path.join(BASE_DIR, "web.py"), "web.py")
             # إضافة مجلد static لو موجود
-            if os.path.exists("static"):
-                for root, dirs, files in os.walk("static"):
+            static_dir = os.path.join(BASE_DIR, "static")
+            if os.path.exists(static_dir):
+                for root, dirs, files in os.walk(static_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        zf.write(file_path, file_path)
+                        zf.write(file_path, os.path.relpath(file_path, BASE_DIR))
         
         from flask import send_file
         return send_file(backup_filename, as_attachment=True, download_name=backup_filename)
@@ -3170,7 +3229,8 @@ def admin_backup_restore():
             def restart():
                 import time
                 time.sleep(2)
-                os.execl(sys.executable, sys.executable, "web.py")
+                if not os.environ.get("RENDER"):  # على Render يعيد المنصة تشغيل الخدمة بنفسها
+                    os.execl(sys.executable, sys.executable, os.path.join(BASE_DIR, "web.py"))
             threading.Thread(target=restart, daemon=True).start()
             
             return redirect(url_for("admin_settings"))
@@ -8616,7 +8676,7 @@ def icon():
 # ============================================================
 def auto_fix_db():
     """يتأكد من وجود كل الأعمدة والجداول اللي الكود محتاجها"""
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=30)
     try:
         # قائمة بكل الجداول والأعمدة المطلوبة
         needed_columns = [
@@ -8707,7 +8767,7 @@ def auto_fix_db():
 def run_migrations():
     """ترحيلات آمنة - بتتنفذ في كل تشغيل."""
     auto_fix_db()
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=30)
     try:
         needed = [
             ("announcements", "text_color", "TEXT DEFAULT '#e8e8f5'"),
@@ -8733,43 +8793,7 @@ def run_migrations():
         con.close()
 
 
-try:
-    auto_fix_db()
-except Exception as e:
-    print(f"[AUTO-FIX] startup error: {e}")
-
-try:
-    auto_fix_db()
-except Exception as e:
-    print(f"[AUTO-FIX] startup error: {e}")
-
-try:
-    auto_fix_db()
-except Exception as e:
-    print("[AUTO-FIX] startup error: " + str(e))
-
-if not os.path.exists(DB_PATH):
-    init_db()
-    print(f"[init] Database created at: {DB_PATH}")
-else:
-    with app.app_context():
-        try:
-            db().execute("SELECT 1 FROM users LIMIT 1")
-        except sqlite3.OperationalError:
-            init_db()
-            print("[init] Database re-initialized")
-
-# زرع الدول الافتراضية لأسعار الشراء (تعمل تلقائياً)
-try:
-    seed_buy_prices()
-except Exception as e:
-    print(f"[seed] init error: {e}")
-
-# الترحيلات بتتنفذ دايماً (حتى لو الداتابيز موجودة)
-try:
-    run_migrations()
-except Exception as e:
-    print(f"[migration] startup error: {e}")
+# (التهيئة الآن تتم في bootstrap_database() أسفل الملف)
 
 
 # ============================================================
@@ -9075,8 +9099,15 @@ def profile_upload_avatar():
         flash("صيغة غير مدعومة. استخدم PNG أو JPG.", "error")
         return redirect(url_for("profile_edit"))
     filename = "user_" + str(u["user_id"]) + "_" + secrets.token_hex(4) + ext
-    filepath = os.path.join("static", "avatars", filename)
-    file.save(filepath)
+    avatars_dir = os.path.join(BASE_DIR, "static", "avatars")
+    os.makedirs(avatars_dir, exist_ok=True)
+    filepath = os.path.join(avatars_dir, filename)
+    try:
+        file.save(filepath)
+    except Exception as e:
+        log.exception("فشل حفظ الصورة الشخصية: %s", e)
+        flash("تعذر حفظ الصورة، حاول مرة أخرى.", "error")
+        return redirect(url_for("profile_edit"))
     db().execute("UPDATE users SET avatar=? WHERE user_id=?", (filename, u["user_id"]))
     db().commit()
     flash("تم تحديث صورة البروفايل بنجاح!", "success")
@@ -9595,16 +9626,43 @@ def my_pending_sales():
 
 
 # ============================================================
-# التشغيل (متوافق مع الاستضافة الخارجية)
+# التهيئة والتشغيل (يعمل مع gunicorn على Render وكذلك مع python web.py)
 # ============================================================
-if __name__ == "__main__":
-    # شغل الدفع التلقائي للبائعين
+def bootstrap_database():
+    """تهيئة آمنة وقابلة للتكرار: تنشئ المجلدات والجداول والأعمدة الناقصة."""
+    for d in ("static/icons", "static/avatars"):
+        os.makedirs(os.path.join(BASE_DIR, d), exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+
+    # init_db آمنة للتكرار (CREATE IF NOT EXISTS + INSERT OR IGNORE)
+    # ملاحظة: لم نعد نفحص وجود الملف قبلها، لأن الاتصال بـ sqlite ينشئ ملفاً فارغاً
+    try:
+        init_db()
+        log.info("قاعدة البيانات جاهزة: %s", DB_PATH)
+    except Exception:
+        log.exception("فشل init_db")
+
+    for name, fn in (("auto_fix_db", auto_fix_db),
+                     ("seed_buy_prices", seed_buy_prices),
+                     ("run_migrations", run_migrations)):
+        try:
+            fn()
+        except Exception:
+            log.exception("فشل %s", name)
+
+
+try:
+    bootstrap_database()
+except Exception:
+    log.exception("فشل تهيئة التطبيق")
+
+# الدفع التلقائي للبائعين: يشتغل مرة واحدة فقط (استخدم worker واحد في Procfile)
+if os.environ.get("MATARI_AUTOPAY", "1") == "1":
     try:
         start_auto_pay_worker()
-    except Exception as e:
-        print(f"[AUTO-PAY] startup error: {e}")
-    
-    import os as _os
-    # fps.ms بيستخدم SERVER_PORT، وباقي الاستضافات بتستخدم PORT
-    _port = 5000
-    app.run(host="0.0.0.0", port=_port, debug=False, threaded=True)
+    except Exception:
+        log.exception("فشل تشغيل worker الدفع التلقائي")
+
+if __name__ == "__main__":
+    log.info("تشغيل السيرفر المحلي على المنفذ %s", PORT)
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
