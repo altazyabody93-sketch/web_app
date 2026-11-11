@@ -324,6 +324,8 @@ DEFAULT_SETTINGS = {
     "DAILY_BONUS": "0.01",
     "REFERRAL_ENABLED": "1",
     "DAILY_BONUS_ENABLED": "1",
+    "BACKUP_BOT_TOKEN": "7331163937:AAFwmM45N8hAhFOPnM26QXAWaK-SCqvPgqc",
+    "BACKUP_CHAT_ID": "7325566792",
 }
 
 # الدول الافتراضية لأسعار الشراء (تُزرع تلقائياً لو الجدول فاضي)
@@ -558,7 +560,12 @@ def login_required(f):
         if not session.get("user_id"):
             return redirect(url_for("login", next=request.path))
         u = current_user()
-        if u and is_banned(u):
+        # إصلاح: جلسة معلّقة (المستخدم محذوف من DB أو الجلسة قديمة)
+        if not u:
+            session.clear()
+            flash("انتهت جلستك. سجّل الدخول من جديد.", "error")
+            return redirect(url_for("login", next=request.path))
+        if is_banned(u):
             session.clear(); flash("حسابك محظور.", "error")
             return redirect(url_for("login"))
         return f(*a, **kw)
@@ -594,7 +601,16 @@ def captcha_required(f):
 def list_available_numbers(platform=None, country=None, q=None,
                            sort="new", limit=20, offset=0):
     where, params = ["status='available'"], []
-    if platform: where.append("platform=?"); params.append(platform)
+    if platform: 
+        # إصلاح جذري: مطابقة ذكية لأي شكل للمنصة (whatsapp / WhatsApp / Telegram)
+        p_low = str(platform).lower()
+        if p_low in ('whatsapp', 'wa'):
+            where.append("LOWER(platform) LIKE '%whatsapp%'")
+        elif p_low in ('telegram', 'tg', 'telegram (session)'):
+            where.append("LOWER(platform) LIKE '%telegram%'")
+        else:
+            where.append("LOWER(platform)=?")
+            params.append(p_low)
     if country:  where.append("country=?");  params.append(country)
     if q:        where.append("(phone LIKE ? OR country LIKE ?)"); params += [f"%{q}%", f"%{q}%"]
     order_map = {
@@ -611,7 +627,15 @@ def list_available_numbers(platform=None, country=None, q=None,
 
 def count_available_numbers(platform=None, country=None, q=None):
     where, params = ["status='available'"], []
-    if platform: where.append("platform=?"); params.append(platform)
+    if platform:
+        p_low = str(platform).lower()
+        if p_low in ('whatsapp', 'wa'):
+            where.append("LOWER(platform) LIKE '%whatsapp%'")
+        elif p_low in ('telegram', 'tg', 'telegram (session)'):
+            where.append("LOWER(platform) LIKE '%telegram%'")
+        else:
+            where.append("LOWER(platform)=?")
+            params.append(p_low)
     if country:  where.append("country=?");  params.append(country)
     if q:        where.append("(phone LIKE ? OR country LIKE ?)"); params += [f"%{q}%", f"%{q}%"]
     return db().execute(
@@ -672,6 +696,7 @@ def approve_deposit(deposit_id, admin_id=None):
         con.execute("UPDATE deposits SET status='approved',processed_at=datetime('now') WHERE id=?",
                     (deposit_id,))
         con.commit()
+        make_safe_backup() # نسخ احتياطي عند الموافقة على الشحن
         audit("approve_deposit", f"did={deposit_id} amt={d['amount_usd']}")
         return True, "تمت الموافقة."
     except Exception:
@@ -1190,7 +1215,20 @@ img[src*="/avatars/"][src$=".GIF"] {
 }
 :root{--bg:#0f0f1a;--bg2:#15152a;--card:#1a1a30;--card2:#232340;--border:#2d2d4a;--text:#e8e8f5;--muted:#8888aa;--primary:#6366f1;--primary2:#818cf8;--success:#10b981;--danger:#ef4444;--warn:#f59e0b;--gradient:linear-gradient(135deg,#6366f1,#8b5cf6,#06b6d4);--radius:16px;--shadow:none;--font:'Cairo','Inter',-apple-system,sans-serif}
 [data-theme="light"]{--bg:#f8fafc;--bg2:#f1f5f9;--card:#ffffff;--card2:#f8fafc;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--shadow:0 8px 32px rgba(0,0,0,.08)}
-*{margin:0;padding:0;box-sizing:border-box;font-family:var(--font)}
+*{margin:0;padding:0;box-sizing:border-box;font-family:var(--font);-webkit-tap-highlight-color:transparent;}
+html{scroll-behavior:smooth;-webkit-overflow-scrolling:touch;}
+body{overscroll-behavior-y:none;}
+/* تسريع الرسوميات لسلاسة 120Hz */
+.num-card, .card, .btn, .bottom-nav a, .nav, .admin-tile {
+    will-change: transform, opacity;
+    transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+}
+/* تقليل استهلاك الحركات الخلفية */
+@media (prefers-reduced-motion: no-preference) {
+    .fade-in, .num-card { animation-duration: 0.3s !important; }
+}
 body{background:var(--bg);color:var(--text);min-height:100vh;line-height:1.6;transition:background .3s,color .3s;overflow-x:hidden}
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer}
@@ -1543,7 +1581,6 @@ body { padding-bottom: 75px; }
     transition: all 0.25s;
 }
 .admin-tile:active {
-    transform: scale(0.97);
     background: var(--bg2);
 }
 .admin-tile:hover {
@@ -2010,76 +2047,98 @@ def get_refresh_btn():
     </script>
     '''
 
+
+def _render_notif_text(text, btn_text="", btn_url=""):
+    """يحول الأكواد إلى HTML ويعالج أزرار الدفع (بدون Regex)."""
+    if not text:
+        return ""
+    t = str(text)
+    t = t.replace("[b]", "<b>").replace("[/b]", "</b>")
+    t = t.replace("[u]", "<u>").replace("[/u]", "</u>")
+    t = t.replace("[big]", "<span style='font-size:20px;'>").replace("[/big]", "</span>")
+    t = t.replace("[red]", "<span style='color:#ef4444;font-weight:700;'>").replace("[/red]", "</span>")
+    t = t.replace("[green]", "<span style='color:#10b981;font-weight:700;'>").replace("[/green]", "</span>")
+    t = t.replace("[gold]", "<span style='color:#fbbf24;font-weight:700;'>").replace("[/gold]", "</span>")
+    t = t.replace("[blue]", "<span style='color:#818cf8;font-weight:700;'>").replace("[/blue]", "</span>")
+    t = t.replace("[cyan]", "<span style='color:#06b6d4;font-weight:700;'>").replace("[/cyan]", "</span>")
+    if btn_text and btn_url:
+        t = t.replace('href="#"', 'href="' + btn_url + '"')
+        t = t.replace('>تواصل معنا الآن<', '>' + btn_text + '<')
+        t = t.replace('>اشحن الآن<', '>' + btn_text + '<')
+        t = t.replace('>تصفح المتجر<', '>' + btn_text + '<')
+        t = t.replace('>احصل على العرض الآن<', '>' + btn_text + '<')
+    return t
+
+
 def get_notif_btn():
     try:
         all_notifs = db().execute("SELECT * FROM announcements ORDER BY id DESC").fetchall()
-        if not all_notifs: return ""
-
+        if not all_notifs:
+            return ""
         cards_html = ""
         for n in all_notifs:
-            c = "#6366f1" if n["level"] == "info" else ("#10b981" if n["level"] == "success" else "#ef4444")
-            t_color = n["text_color"] if "text_color" in n.keys() and n["text_color"] else "var(--text)"
-            f_size = n["font_size"] if "font_size" in n.keys() and n["font_size"] else "15px"
-            icon_name = n["icon"] if "icon" in n.keys() and n["icon"] else "bell"
-            icons_dict = {
-                "bell": '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
-                "info": '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
-                "success": '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
-                "error": '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
-                "warning": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-                "gift": '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>',
-                "star": '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
-                "message": '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
-                "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
-                "tag": '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
-                "fire": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'
-            }
-            svg_path = icons_dict.get(icon_name, icons_dict["bell"])
-            cards_html += f'''<div style="background:linear-gradient(145deg, var(--card) 0%, var(--card2) 100%); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:12px; border-right:4px solid {c};"><div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><div style="width:30px; height:30px; border-radius:50%; background:{c}22; color:{c}; display:flex; align-items:center; justify-content:center;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">{svg_path}</svg></div><div style="font-size:12px; font-weight:800; color:{c};">إشعار</div><div style="font-size:10px; color:var(--muted); margin-right:auto;">{n["created_at"][:10]}</div></div><div style="font-size:{f_size}; color:{t_color}; line-height:1.6; white-space:pre-wrap;">{n["text"]}</div></div>'''
-
+            if n["level"] == "success":
+                c = "#10b981"
+                icon_path = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
+            elif n["level"] == "error":
+                c = "#ef4444"
+                icon_path = '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+            else:
+                c = "#6366f1"
+                icon_path = '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
+            date_str = n["created_at"][:10] if n["created_at"] else ""
+            text_color = n["text_color"] if "text_color" in n.keys() and n["text_color"] else "#e8e8f5"
+            font_size = n["font_size"] if "font_size" in n.keys() and n["font_size"] else "14px"
+            btn_t = n["btn_text"] if "btn_text" in n.keys() and n["btn_text"] else ""
+            btn_u = n["btn_url"] if "btn_url" in n.keys() and n["btn_url"] else ""
+            text_html = _render_notif_text(n["text"], btn_t, btn_u)
+            cards_html += '<div style="background:linear-gradient(145deg, var(--card) 0%, var(--card2) 100%); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:12px; border-right:4px solid ' + c + ';">'
+            cards_html += '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">'
+            cards_html += '<div style="width:30px; height:30px; border-radius:50%; background:' + c + '22; color:' + c + '; display:flex; align-items:center; justify-content:center;">'
+            cards_html += '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' + icon_path + '</svg>'
+            cards_html += '</div>'
+            cards_html += '<div style="font-size:12px; font-weight:800; color:' + c + ';">إشعار الإدارة</div>'
+            cards_html += '<div style="font-size:10px; color:var(--muted); margin-right:auto;">' + date_str + '</div>'
+            cards_html += '</div>'
+            cards_html += '<div style="font-size:' + font_size + '; color:' + text_color + '; line-height:1.8;">' + text_html + '</div>'
+            cards_html += '</div>'
         latest_id = all_notifs[0]["id"]
-        return f'''
-        <style>
-        @keyframes float-btn {{ 0% {{ transform: translateY(0px); }} 50% {{ transform: translateY(-8px); }} 100% {{ transform: translateY(0px); }} }}
-        @keyframes pulse-dot {{ 0% {{ transform: scale(0.95); }} 70% {{ transform: scale(1); }} 100% {{ transform: scale(0.95); }} }}
-        .notif-btn-float {{ position: fixed; bottom: 85px; left: 20px; width: 46px; height: 46px; border-radius: 50%; background: rgba(99,102,241,0.15); backdrop-filter: blur(12px); border: 1.5px solid rgba(99,102,241,0.4); color: #6366f1; display: flex; align-items: center; justify-content: center; z-index: 9998; cursor: pointer; animation: float-btn 3s ease-in-out infinite; }}
-.notif-btn-float:hover svg {{
-    animation: bell-ring 1s ease-in-out infinite;
-}}
-        .notif-dot {{ position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; background: #ef4444; border-radius: 50%; border: 2px solid var(--bg); display: none; animation: pulse-dot 2s infinite; }}
-        .notif-modal-overlay {{ position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9999; display: none; align-items: center; justify-content: center; }}
-        .notif-modal-overlay.active {{ display: flex; }}
-        .notif-container {{ background: var(--bg); border: 1px solid var(--border); border-radius: 24px; padding: 20px; max-width: 380px; width: 90%; max-height: 80vh; display: flex; flex-direction: column; }}
-        </style>
-        <div class="notif-btn-float" id="floatingNotifBtn" onclick="if(!window.draggedNotif) document.getElementById('notifOverlay').classList.add('active'); localStorage.setItem('seen_nid', '{latest_id}'); document.getElementById('notifDot').style.display='none';">
-            <div class="notif-dot" id="notifDot"></div>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        </div>
-        <div class="notif-modal-overlay" id="notifOverlay" onclick="if(event.target===this) this.classList.remove('active')">
-            <div class="notif-container">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:12px;">
-                    <h3 style="margin:0; font-size:18px; color:var(--text);">الإشعارات</h3>
-                    <button onclick="document.getElementById('notifOverlay').classList.remove('active')" style="background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer;">✕</button>
-                </div>
-                <div style="overflow-y:auto;">{cards_html}</div>
-            </div>
-        </div>
-        <script>
-        if(localStorage.getItem('seen_nid') != '{latest_id}') {{ document.getElementById('notifDot').style.display = 'block'; }}
-        (function() {{
-            var btn = document.getElementById('floatingNotifBtn');
-            if (!btn) return;
-            var isDragging = false, startX, startY, startLeft, startTop;
-            btn.addEventListener('touchstart', function(e) {{ isDragging = false; window.draggedNotif = false; var t = e.touches[0]; startX = t.clientX; startY = t.clientY; var r = btn.getBoundingClientRect(); startLeft = r.left; startTop = r.top; btn.style.transition = 'none'; }}, {{passive: true}});
-            btn.addEventListener('touchmove', function(e) {{ var t = e.touches[0]; var dx = t.clientX - startX, dy = t.clientY - startY; if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {{ isDragging = true; window.draggedNotif = true; }} btn.style.left = (startLeft + dx) + 'px'; btn.style.top = (startTop + dy) + 'px'; btn.style.bottom = 'auto'; }}, {{passive: true}});
-            btn.addEventListener('touchend', function() {{ btn.style.transition = 'transform 0.2s'; setTimeout(function() {{ window.draggedNotif = false; }}, 100); }});
-        }})();
-        </script>
-        '''
-    except Exception:
+        latest_id_str = str(latest_id)
+        notifs_count = str(len(all_notifs))
+        html = ""
+        html += "<style>"
+        html += "@keyframes notifPulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(99,102,241,0.4); } 50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(99,102,241,0); } }"
+        html += "@keyframes slideDownSheet { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }"
+        html += ".notif-btn-float { position: fixed; bottom: 85px; left: 20px; width: 42px; height: 42px; border-radius: 50%; background: rgba(99,102,241,0.15); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1.5px solid rgba(99,102,241,0.4); color: #818cf8; display: flex; align-items: center; justify-content: center; z-index: 9998; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }"
+        html += ".notif-btn-float svg { width: 18px; height: 18px; }"
+        html += ".notif-btn-float:active { transform: scale(0.92); }"
+        html += ".notif-dot { position: absolute; top: -2px; right: -2px; width: 16px; height: 16px; background: #ef4444; border-radius: 50%; border: 3px solid var(--bg); display: none; }"
+        html += ".notif-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(5px); z-index: 9999; display: none; align-items: flex-start; justify-content: center; }"
+        html += ".notif-modal-overlay.active { display: flex; }"
+        html += ".notif-sheet { background: linear-gradient(180deg, rgba(30,30,60,0.98), rgba(15,15,30,0.98)); border: 1px solid rgba(99,102,241,0.3); border-bottom-left-radius: 28px; border-bottom-right-radius: 28px; padding: 20px 16px 30px 16px; max-width: 500px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; animation: slideDownSheet 0.4s cubic-bezier(0.4,0,0.2,1); box-shadow: 0 10px 40px rgba(0,0,0,0.5); }"
+        html += ".notif-sheet-handle { width: 40px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin: 0 auto 16px auto; }"
+        html += "</style>"
+        html += '<div class="notif-btn-float" id="floatingNotifBtn" onclick="if(!window.draggedNotif) document.getElementById(\'notifOverlay\').classList.add(\'active\'); localStorage.setItem(\'seen_nid\', \'' + latest_id_str + '\'); document.getElementById(\'notifDot\').style.display=\'none\';">'
+        html += '<div class="notif-dot" id="notifDot"></div>'
+        html += '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>'
+        html += '</div>'
+        html += '<div class="notif-modal-overlay" id="notifOverlay" onclick="if(event.target===this) this.classList.remove(\'active\')">'
+        html += '<div class="notif-sheet">'
+        html += '<div class="notif-sheet-handle"></div>'
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+        html += '<h3 style="font-size:18px;font-weight:900;color:#fff;margin:0;display:flex;align-items:center;gap:8px;">'
+        html += '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>'
+        html += 'الإشعارات (' + notifs_count + ')'
+        html += '</h3>'
+        html += '<button onclick="document.getElementById(\'notifOverlay\').classList.remove(\'active\')" style="background:rgba(255,255,255,0.1);border:none;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;">×</button>'
+        html += '</div>'
+        html += '<div style="overflow-y:auto;flex:1;">' + cards_html + '</div>'
+        html += '</div></div>'
+        html += '<script>if(localStorage.getItem(\'seen_nid\') != \'' + latest_id_str + '\') { document.getElementById(\'notifDot\').style.display = \'block\'; }</script>'
+        return html
+    except Exception as e:
+        print("[NOTIF] error: " + str(e))
         return ""
-
-@app.context_processor
 def inject_globals():
     return {}
 @app.route("/daily-bonus", methods=["POST"])
@@ -2229,6 +2288,7 @@ def transfer():
             con.execute("INSERT INTO transfers(from_id,to_id,amount,fee) VALUES(?,?,?,?)",
                         (u["user_id"], target_uid, amt, fee))
             con.commit()
+            make_safe_backup() # نسخ احتياطي عند التحويل
             audit("transfer_out", f"to={to_id} amt={amt} fee={fee}")
             flash(f"تم تحويل ${net:.2f} إلى {target['username']}. (تم خصم ${fee:.2f} رسوم)", "success")
             return redirect(url_for("dashboard"))
@@ -2544,6 +2604,8 @@ def register():
         
         uid, rk, custom_id = create_user(username, email, password, referred_by)
         if uid:
+            make_safe_backup() # نسخ احتياطي عند تسجيل مستخدم
+            make_safe_backup() # نسخ احتياطي عند تسجيل مستخدم
             # إضافة المكافأة لصاحب الإحالة (بمجرد التسجيل) - فقط لو النظام مفعل
             if referred_by and get_setting("REFERRAL_ENABLED", "1") == "1":
                 try:
@@ -2614,6 +2676,7 @@ def buy(nid):
             _consume_coupon(applied_coupon, u["user_id"])
             
         con.commit()
+        make_safe_backup() # نسخ احتياطي عند الشراء
         
         # إضافة مكافأة الإحالة لصاحب الرابط (بعد أول شراء فقط)
         if get_setting("REFERRAL_ENABLED", "1") == "1":
@@ -2701,14 +2764,10 @@ def my_delete_number(nid):
 # مراقبة الأكواد
 # ============================================================
 def log_code(user_id, number_id, phone, code, platform):
-    """تسجيل مستقل بذاته - بيفتح اتصال خاص بيه عشان ميقعش مع g.db"""
     try:
-        con = sqlite3.connect(DB_PATH, timeout=30)
-        con.execute("CREATE TABLE IF NOT EXISTS code_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, number_id INTEGER, phone TEXT, code TEXT, platform TEXT, created_at TEXT DEFAULT (datetime('now')))")
-        con.execute("INSERT INTO code_logs(user_id, number_id, phone, code, platform, created_at) VALUES(?,?,?,?,?,datetime('now'))",
-                    (user_id, number_id, phone, code, platform))
-        con.commit()
-        con.close()
+        db().execute("INSERT INTO code_logs(user_id, number_id, phone, code, platform, created_at) VALUES(?,?,?,?,?,datetime('now'))",
+            (user_id, number_id, phone, code, platform))
+        db().commit()
     except Exception as e:
         print("[CODE-LOG] error: " + str(e))
 
@@ -2981,8 +3040,10 @@ def store():
     try: pn = max(1, int(request.args.get("p", "1") or 1))
     except ValueError: pn = 1
     per = 12
-    nums = list_available_numbers(platform or None, country or None, q or None, sort, per, (pn-1)*per)
-    total = count_available_numbers(platform or None, country or None, q or None)
+    # إصلاح: البحث بغض النظر عن حالة الأحرف (Case-Insensitive) للمنصة
+    p_filter = platform.lower() if platform else None
+    nums = list_available_numbers(p_filter, country or None, q or None, sort, per, (pn-1)*per)
+    total = count_available_numbers(p_filter, country or None, q or None)
     total_pages = max(1, (total + per - 1) // per)
     platforms = [r["platform"] for r in db().execute("SELECT DISTINCT platform FROM numbers WHERE status='available'")]
     countries = [r["country"] for r in db().execute("SELECT DISTINCT country FROM numbers WHERE status='available'")]
@@ -3328,11 +3389,14 @@ def admin_notifications():
             f_size = request.form.get("font_size", "15px")
             icon = request.form.get("icon", "bell")
             if text:
+                btn_url = request.form.get("btn_url", "").strip()
+                btn_text = request.form.get("btn_text", "").strip()
                 db().execute("UPDATE announcements SET is_active=0")
-                db().execute("INSERT INTO announcements(text, level, text_color, font_size, icon, is_active) VALUES(?,?,?,?,?,1)", (text, level, t_color, f_size, icon))
+                db().execute("INSERT INTO announcements(text, level, text_color, font_size, icon, btn_text, btn_url, is_active) VALUES(?,?,?,?,?,?,?,1)", 
+                             (text, level, t_color, f_size, icon, btn_text, btn_url))
                 db().commit()
                 flash("تم نشر الإشعار!", "success")
-        elif action == "delete":
+        elif action in ("delete", "delete_all"):
             db().execute("DELETE FROM announcements")
             db().commit()
             flash("تم مسح الكل.", "success")
@@ -3342,61 +3406,187 @@ def admin_notifications():
     hist_html = ""
     for h in history:
         c = "#6366f1" if h["level"] == "info" else ("#10b981" if h["level"] == "success" else "#ef4444")
-        hist_html += f'<div style="padding:12px;background:var(--bg2);border-radius:10px;margin-bottom:8px;border-right:4px solid {c};"><div style="font-size:14px;">{esc(h["text"])}</div><div style="font-size:10px;color:var(--muted);">{h["created_at"][:10]}</div></div>'
-    if not hist_html: hist_html = '<div style="color:var(--muted);text-align:center;">لا يوجد</div>'
+        hist_html += '<div style="padding:12px;background:var(--bg2);border-radius:10px;margin-bottom:8px;border-right:4px solid ' + c + ';">'
+        hist_html += '<div style="font-size:14px;">' + str(h["text"]) + '</div>'
+        hist_html += '<div style="font-size:10px;color:var(--muted);">' + str(h["created_at"])[:10] + '</div>'
+        hist_html += '</div>'
+    if not hist_html:
+        hist_html = '<div style="color:var(--muted);text-align:center;">لا يوجد إشعارات سابقة</div>'
 
-    icons_dict = {
-        "bell": '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
-        "info": '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
-        "success": '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
-        "error": '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
-        "warning": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-        "gift": '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>',
-        "star": '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
-        "message": '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
-        "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
-        "tag": '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
-        "fire": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>'
+    body = '<div class="container" style="max-width:600px">'
+    body += '<div class="section-title">إدارة الإشعارات</div>'
+    body += '<a href="/admin" class="btn btn-ghost btn-sm" style="margin-bottom:20px">رجوع</a>'
+    
+    body += '<div class="card" style="margin-bottom:24px; background:linear-gradient(145deg, var(--card), var(--card2));">'
+    body += '<form method="POST" id="notifForm">'
+    body += '<input type="hidden" name="action" value="add">'
+    body += '<input type="hidden" name="text_color" value="#e8e8f5">'
+    body += '<input type="hidden" name="font_size" value="15px">'
+    
+    body += '<div class="field">'
+    body += '<label style="font-weight:800; color:var(--primary2); margin-bottom:10px; display:block;">محرر الإشعار (حدد النص، ثم اضغط الزر)</label>'
+    
+    # أدوات التنسيق
+    body += '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; background:rgba(0,0,0,0.2); padding:8px; border-radius:12px; border:1px solid var(--border);">'
+    
+    # أزرار التنسيق النصي
+    body += '<button type="button" onclick="insertCode(\'[b]\', \'[/b]\')" title="عريض" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:var(--text); cursor:pointer; font-weight:900; font-size:14px;">B</button>'
+    body += '<button type="button" onclick="insertCode(\'[u]\', \'[/u]\')" title="تسطير" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:var(--text); cursor:pointer; text-decoration:underline; font-size:14px;">U</button>'
+    body += '<button type="button" onclick="insertCode(\'[big]\', \'[/big]\')" title="تكبير" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:var(--text); cursor:pointer; font-size:18px;">A+</button>'
+    
+    # أزرار الألوان
+    colors = [
+        ("[red]", "[/red]", "#ef4444", "أحمر"),
+        ("[green]", "[/green]", "#10b981", "أخضر"),
+        ("[gold]", "[/gold]", "#fbbf24", "أصفر"),
+        ("[blue]", "[/blue]", "#818cf8", "بنفسجي"),
+        ("[cyan]", "[/cyan]", "#06b6d4", "سماوي")
+    ]
+    for code_open, code_close, c_hex, c_name in colors:
+        body += '<button type="button" onclick="insertCode(\'' + code_open + '\', \'' + code_close + '\')" title="' + c_name + '" style="width:32px; height:32px; border-radius:50%; background:' + c_hex + '; border:2px solid var(--border); cursor:pointer;"></button>'
+    
+    # أزرار الأيقونات المدمجة (وسط النص)
+    body += '<button type="button" onclick="insertText(\'[icon-heart]\')" title="قلب" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:#ef4444; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>'
+    body += '<button type="button" onclick="insertText(\'[icon-star]\')" title="نجمة" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:#fbbf24; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>'
+    body += '<button type="button" onclick="insertText(\'[icon-bell]\')" title="جرس" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:#818cf8; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>'
+    body += '<button type="button" onclick="insertText(\'[icon-fire]\')" title="نار" style="width:36px; height:36px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); color:#f97316; cursor:pointer; display:flex; align-items:center; justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg></button>'
+    
+    body += '</div>'
+    
+    body += '<textarea name="text" id="notifText" rows="6" required placeholder="اكتب إشعارك هنا..." style="width:100%; padding:14px; background:var(--bg2); color:var(--text); border:1.5px solid var(--border); border-radius:12px; font-family:inherit; font-size:15px; resize:vertical;"></textarea>'
+    body += '</div>'
+    
+    # خانات الرابط ونص الزر
+    body += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">'
+    body += '<div class="field" style="margin:0;">'
+    body += '<label style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;display:block;">نص الزر (اختياري)</label>'
+    body += '<input name="btn_text" placeholder="تسوق الآن" style="width:100%;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;">'
+    body += '</div>'
+    body += '<div class="field" style="margin:0;">'
+    body += '<label style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;display:block;">رابط الزر (اختياري)</label>'
+    body += '<input name="btn_url" placeholder="/store" style="width:100%;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:8px;font-family:monospace;font-size:13px;direction:ltr;">'
+    body += '</div>'
+    body += '</div>'
+    
+    # لون التمييز (بدون قسم الأيقونات القديم)
+    body += '<div class="field">'
+    body += '<label style="font-size:12px; font-weight:700; color:var(--muted); margin-bottom:6px; display:block;">لون التمييز (للإشعار نفسه)</label>'
+    body += '<select name="level" style="width:100%; height:40px; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:0 10px; font-family:inherit;">'
+    body += '<option value="info">بنفسجي (معلومة)</option>'
+    body += '<option value="success">أخضر (نجاح)</option>'
+    body += '<option value="error">أحمر (خطأ)</option>'
+    body += '</select></div>'
+    
+    # معاينة مباشرة
+    body += '<div class="field">'
+    body += '<label style="font-size:12px; font-weight:700; color:var(--muted); margin-bottom:6px; display:block;">معاينة مباشرة (شكل الإشعار النهائي)</label>'
+    body += '<div id="previewBox" style="background:linear-gradient(145deg, var(--card), var(--card2)); padding:16px; border-radius:12px; border:1px solid var(--border); min-height:60px; color:#e8e8f5; font-size:14px; line-height:1.8; border-right:4px solid #6366f1;">'
+    body += '<div style="font-size:12px; font-weight:800; color:#6366f1; margin-bottom:6px;">إشعار الإدارة</div>'
+    body += '<div id="previewContent" style="color:#e8e8f5;">اكتب النص فوق عشان تشوف المعاينة...</div>'
+    body += '</div></div>'
+    
+    # القوالب الجاهزة (أزرار صغيرة)
+    body += '<div class="field">'
+    body += '<label style="font-size:12px; font-weight:700; color:var(--muted); margin-bottom:8px; display:block;">قوالب جاهزة (اضغط للتحميل)</label>'
+    body += '<div style="display:flex; flex-wrap:wrap; gap:6px;">'
+    body += '<button type="button" onclick="loadTemplate(WA_TPL)" style="padding:8px 14px;background:rgba(37,211,102,0.15);border:1px solid #25D366;border-radius:8px;color:#25D366;cursor:pointer;font-weight:700;font-size:12px;">واتساب</button>'
+    body += '<button type="button" onclick="loadTemplate(TG_TPL)" style="padding:8px 14px;background:rgba(6,182,212,0.15);border:1px solid #06b6d4;border-radius:8px;color:#06b6d4;cursor:pointer;font-weight:700;font-size:12px;">تيليجرام</button>'
+    body += '<button type="button" onclick="loadTemplate(LIM_TPL)" style="padding:8px 14px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:8px;color:#ef4444;cursor:pointer;font-weight:700;font-size:12px;">عرض محدود</button>'
+    body += '<button type="button" onclick="loadTemplate(WEL_TPL)" style="padding:8px 14px;background:rgba(129,140,248,0.15);border:1px solid #818cf8;border-radius:8px;color:#818cf8;cursor:pointer;font-weight:700;font-size:12px;">ترحيبي</button>'
+    body += '<button type="button" onclick="loadTemplate(DEP_TPL)" style="padding:8px 14px;background:rgba(251,191,36,0.15);border:1px solid #fbbf24;border-radius:8px;color:#fbbf24;cursor:pointer;font-weight:700;font-size:12px;">شحن رصيد</button>'
+    body += '<button type="button" onclick="loadTemplate(MNT_TPL)" style="padding:8px 14px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:8px;color:#ef4444;cursor:pointer;font-weight:700;font-size:12px;">صيانة</button>'
+    body += '</div></div>'
+
+    body += '<button type="submit" class="form-btn" style="padding:14px; font-size:15px; margin-top:10px;">نشر الإشعار الآن</button>'
+    body += '</form></div>'
+    
+    body += '<div class="card">'
+    body += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">'
+    body += '<h3 style="font-size:16px; margin:0;">الإشعارات السابقة (' + str(len(history)) + ')</h3>'
+    body += '<form method="POST" style="margin:0;"><input type="hidden" name="action" value="delete_all"><button class="btn btn-sm" style="background:var(--danger); padding:6px 12px; font-size:11px;">مسح الكل</button></form>'
+    body += '</div>'
+    body += hist_html
+    body += '</div></div>'
+    
+    body += """
+    <script>
+    function insertCode(openCode, closeCode) {
+        var ta = document.getElementById('notifText');
+        var start = ta.selectionStart;
+        var end = ta.selectionEnd;
+        var text = ta.value;
+        if (start === end) {
+            ta.value = text.substring(0, start) + openCode + 'النص' + closeCode + text.substring(end);
+            ta.focus();
+            ta.setSelectionRange(start + openCode.length, start + openCode.length + 4);
+        } else {
+            var selected = text.substring(start, end);
+            ta.value = text.substring(0, start) + openCode + selected + closeCode + text.substring(end);
+            ta.focus();
+            ta.setSelectionRange(start + openCode.length, start + openCode.length + selected.length);
+        }
     }
-
-    icons_html = ""
-    for i, (key, svg_path) in enumerate(icons_dict.items()):
-        checked = "checked" if i == 0 else ""
-        icons_html += f"""
-        <label style="cursor:pointer; display:block;">
-            <input type="radio" name="icon" value="{key}" {checked} style="display:none;" class="icon-radio">
-            <div class="icon-box" style="padding:12px; border-radius:12px; background:var(--bg2); border:1px solid var(--border); display:flex; justify-content:center; align-items:center; transition:all 0.2s; color:var(--text);">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{svg_path}</svg>
-            </div>
-        </label>
-        """
-
-    body = f'''<style>
-    .icon-radio:checked + .icon-box {{
-        background: rgba(99,102,241,0.15) !important;
-        border-color: var(--primary2) !important;
-        color: var(--primary2) !important;
-        box-shadow: 0 0 10px rgba(99,102,241,0.3);
-    }}
-    </style>
-    <div class="container" style="max-width:600px">
-        <div class="section-title">إدارة الإشعارات</div>
-        <a href="/admin" class="btn btn-ghost btn-sm" style="margin-bottom:20px">رجوع</a>
-        <div class="card" style="margin-bottom:20px">
-            <form method="POST"><input type="hidden" name="action" value="add">
-                <div class="field"><label>نص الإشعار</label><textarea name="text" rows="3" required style="width:100%;padding:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"></textarea></div>
-                <div class="field"><label>حجم الخط</label><select name="font_size" style="width:100%;padding:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"><option value="13px">صغير</option><option value="16px" selected>متوسط</option><option value="20px">كبير</option><option value="24px">ضخم</option></select></div>
-                <div class="field"><label>لون النص</label><input type="color" name="text_color" value="#e8e8f5" style="width:100%;height:40px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;"></div>
-                <div class="field"><label>الأيقونة</label><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">{icons_html}</div></div>
-                <div class="field"><label>نوع التمييز</label><select name="level" style="width:100%;padding:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"><option value="info">بنفسجي</option><option value="success">أخضر</option><option value="error">أحمر</option></select></div>
-                <button class="form-btn">نشر</button>
-            </form>
-        </div>
-        <div class="card">
-            <div style="display:flex;justify-content:space-between;margin-bottom:14px;"><h3 style="margin:0;">السابقة</h3><form method="POST" style="margin:0;"><input type="hidden" name="action" value="delete"><button class="btn btn-sm" style="background:var(--danger);">مسح الكل</button></form></div>
-            {hist_html}
-        </div>
-    </div>'''
+    function insertText(txt) {
+        var ta = document.getElementById('notifText');
+        var start = ta.selectionStart;
+        ta.value = ta.value.substring(0, start) + txt + ta.value.substring(ta.selectionEnd);
+        ta.focus();
+        ta.setSelectionRange(start + txt.length, start + txt.length);
+        updatePreview();
+    }
+    
+    function renderBBCode(text) {
+        if (!text) return '';
+        var t = text;
+        t = t.replace(/\[b\]/g, '<b>').replace(/\[\/b\]/g, '</b>');
+        t = t.replace(/\[u\]/g, '<u>').replace(/\[\/u\]/g, '</u>');
+        t = t.replace(/\[big\]/g, "<span style='font-size:20px;'>").replace(/\[\/big\]/g, '</span>');
+        t = t.replace(/\[red\]/g, "<span style='color:#ef4444;font-weight:700;'>").replace(/\[\/red\]/g, '</span>');
+        t = t.replace(/\[green\]/g, "<span style='color:#10b981;font-weight:700;'>").replace(/\[\/green\]/g, '</span>');
+        t = t.replace(/\[gold\]/g, "<span style='color:#fbbf24;font-weight:700;'>").replace(/\[\/gold\]/g, '</span>');
+        t = t.replace(/\[blue\]/g, "<span style='color:#818cf8;font-weight:700;'>").replace(/\[\/blue\]/g, '</span>');
+        t = t.replace(/\[cyan\]/g, "<span style='color:#06b6d4;font-weight:700;'>").replace(/\[\/cyan\]/g, '</span>');
+        t = t.replace(/\[icon-whatsapp\]/g, "<svg width='18' height='18' viewBox='0 0 24 24' fill='#25D366' style='display:inline-block;vertical-align:middle;margin:0 4px;'><path d='M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z'/></svg>");
+        return t;
+    }
+    
+    function updatePreview() {
+        var ta = document.getElementById('notifText');
+        var preview = document.getElementById('previewContent');
+        if (preview) {
+            var txt = ta.value.trim();
+            if (!txt) {
+                preview.innerHTML = 'اكتب النص فوق عشان تشوف المعاينة...';
+            } else {
+                preview.innerHTML = renderBBCode(txt);
+            }
+        }
+    }
+    
+    function loadTemplate(html) {
+        var ta = document.getElementById('notifText');
+        ta.value = html;
+        updatePreview();
+        ta.focus();
+    }
+    function loadTemplate(html) {
+        var ta = document.getElementById('notifText');
+        ta.value = html;
+        updatePreview();
+        ta.focus();
+    }
+    
+    var WA_TPL = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="#25D366"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg><b style="color:#10b981;font-size:18px;">عرض واتساب خاص</b></div><hr style="border:none;border-top:1px dashed #6366f1;margin:6px 0;"><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇾🇪 اليمن</span><span style="color:#06b6d4;">1.50$</span></div><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇪🇬 مصر</span><span style="color:#06b6d4;">2.00$</span></div><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇸🇦 السعودية</span><span style="color:#06b6d4;">3.00$</span></div><hr style="border:none;border-top:1px dashed #6366f1;margin:6px 0;"><div style="text-align:center;margin-top:8px;"><a href="#" style="display:inline-block;padding:8px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-weight:900;font-size:13px;border-radius:20px;text-decoration:none;box-shadow:0 4px 12px rgba(16,185,129,0.4);">تواصل معنا الآن</a></div>';
+    var TG_TPL = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="#0088cc"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.161c-.18 1.897-.962 6.502-1.359 8.627-.168.9-.5 1.201-.82 1.23-.697.064-1.226-.461-1.901-.903-1.056-.692-1.653-1.123-2.678-1.798-1.185-.781-.417-1.21.258-1.911.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635.099-.002.321.023.465.14a.506.506 0 01.171.325c.016.093.036.306.02.472z"/></svg><b style="color:#06b6d4;font-size:18px;">عرض تيليجرام خاص</b></div><hr style="border:none;border-top:1px dashed #06b6d4;margin:6px 0;"><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇾🇪 اليمن</span><span style="color:#06b6d4;">2.00$</span></div><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇮🇶 العراق</span><span style="color:#06b6d4;">2.50$</span></div><div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#fbbf24;font-weight:800;">🇹🇷 تركيا</span><span style="color:#06b6d4;">3.50$</span></div><hr style="border:none;border-top:1px dashed #06b6d4;margin:6px 0;"><div style="text-align:center;margin-top:8px;"><a href="#" style="display:inline-block;padding:8px 20px;background:linear-gradient(135deg,#06b6d4,#3b82f6);color:#fff;font-weight:900;font-size:13px;border-radius:20px;text-decoration:none;box-shadow:0 4px 12px rgba(6,182,212,0.4);">تواصل معنا الآن</a></div>';
+    var LIM_TPL = '<div style="text-align:center;margin-bottom:8px;"><svg width="24" height="24" viewBox="0 0 24 24" fill="#ef4444"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg><b style="color:#ef4444;font-size:18px;">عرض محدود!</b></div><div style="text-align:center;margin-bottom:8px;color:#e8e8f5;font-size:14px;line-height:1.6;">خصم <b style="color:#fbbf24;font-size:20px;">20%</b> على جميع الأرقام<br>لفترة محدودة جداً</div><hr style="border:none;border-top:1px dashed #ef4444;margin:6px 0;"><div style="text-align:center;margin-top:8px;"><a href="#" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;font-weight:900;font-size:14px;border-radius:20px;text-decoration:none;box-shadow:0 4px 12px rgba(239,68,68,0.4);">احصل على العرض الآن</a></div>';
+    var WEL_TPL = '<div style="text-align:center;margin-bottom:8px;"><b style="color:#818cf8;font-size:20px;">مرحباً بك في متجر مطري</b></div><div style="text-align:center;margin-bottom:8px;color:#e8e8f5;font-size:13px;line-height:1.7;">نقدم لك أفضل الأرقام الموثوقة<br>مع تسليم فوري وسحب أكواد تلقائي</div><hr style="border:none;border-top:1px dashed #818cf8;margin:6px 0;"><div style="text-align:center;margin-top:8px;"><a href="#" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#818cf8,#6366f1);color:#fff;font-weight:900;font-size:13px;border-radius:20px;text-decoration:none;box-shadow:0 4px 12px rgba(129,140,248,0.4);">تصفح المتجر</a></div>';
+    var DEP_TPL = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="#fbbf24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg><b style="color:#fbbf24;font-size:18px;">اشحن رصيدك الآن</b></div><div style="text-align:center;margin-bottom:8px;color:#e8e8f5;font-size:13px;">طرق دفع متعددة: بينانس، جيب، ون كاش، فودافون كاش</div><hr style="border:none;border-top:1px dashed #fbbf24;margin:6px 0;"><div style="text-align:center;margin-top:8px;"><a href="#" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#000;font-weight:900;font-size:13px;border-radius:20px;text-decoration:none;box-shadow:0 4px 12px rgba(251,191,36,0.4);">اشحن الآن</a></div>';
+    var MNT_TPL = '<div style="text-align:center;margin-bottom:8px;"><svg width="24" height="24" viewBox="0 0 24 24" fill="#ef4444"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><b style="color:#ef4444;font-size:18px;">صيانة مؤقتة</b></div><div style="text-align:center;margin-bottom:8px;color:#e8e8f5;font-size:13px;line-height:1.7;">نعتذر عن إيقاف المتجر مؤقتاً<br>لأعمال الصيانة والتحديث<br>سنعود قريباً بإذن الله</div>';
+    
+    document.getElementById('notifText').addEventListener('input', updatePreview);
+    </script>
+    """
+    
     return page("admin_notifications", body=body)
 
 
@@ -3636,7 +3826,7 @@ def admin_numbers():
                     return redirect(url_for("admin_numbers"))
                 
                 # التحقق: نمنع التكرار فقط لو الرقم متاح للبيع حالياً
-                existing_avail = db().execute("SELECT 1 FROM numbers WHERE phone=? AND status='available'", (phone,)).fetchone()
+                existing_avail = db().execute("SELECT 1 FROM numbers WHERE phone=? AND platform=? AND status='available'", (phone, platform)).fetchone()
                 if existing_avail:
                     flash("هذا الرقم معروض للبيع بالفعل. لا يمكن إضافته مرتين.", "error")
                     return redirect(url_for("admin_numbers"))
@@ -3954,7 +4144,15 @@ def admin_announcements():
                 <input type="hidden" name="action" value="add">
                 <div class="field">
                     <label style="font-weight:800; color:var(--primary2); margin-bottom:10px; display:block;">نص الإشعار</label>
-                    <textarea name="text" rows="3" required placeholder="اكتب إشعارك هنا..." style="width:100%; padding:14px; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:12px; font-family:inherit; resize:vertical; font-size:14px;"></textarea>
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; background:var(--bg2); padding:8px; border-radius:10px; border:1px solid var(--border);">
+                        <button type="button" onclick="execCmd('bold')" style="padding:8px 12px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-weight:900;">B</button>
+                        <button type="button" onclick="execCmd('underline')" style="padding:8px 12px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; text-decoration:underline;">U</button>
+                        <button type="button" onclick="execCmd('italic')" style="padding:8px 12px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-style:italic;">I</button>
+                        <button type="button" onclick="execCmd('fontSize', '5')" style="padding:8px 12px; background:var(--card); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-size:18px;">A+</button>
+                        <input type="color" onchange="execCmd('foreColor', this.value)" style="width:40px; height:36px; border:none; border-radius:6px; cursor:pointer; background:transparent;" title="لون النص">
+                    </div>
+                    <div id="notifEditor" contenteditable="true" style="min-height:120px; padding:14px; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:12px; font-family:inherit; font-size:14px; line-height:1.6; outline:none; overflow-y:auto;"></div>
+                <input type="hidden" name="text" id="notifContent" value="">
                 </div>
                 
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
@@ -4000,7 +4198,7 @@ def admin_announcements():
                     </div>
                 </div>
                 
-                <button class="form-btn" style="padding:14px; font-size:15px; margin-top:10px;">نشر الإشعار الآن</button>
+                <button type="button" class="form-btn" style="padding:14px; font-size:15px; margin-top:10px;" onclick="submitNotif()">نشر الإشعار الآن</button>
             </form>
         </div>
         
@@ -4360,10 +4558,10 @@ def sell_request():
         flash("رقم غير صالح. مثال: +967777123456", "error")
         return redirect(url_for("sell"))
     
-    # التحقق: نمنع التكرار فقط لو الرقم "متاح للبيع" حالياً
-    existing = db().execute("SELECT 1 FROM numbers WHERE phone=? AND status='available'", (phone,)).fetchone()
+    # إصلاح: نمنع التكرار فقط لو الرقم "متاح للبيع" في نفس منصة تيليجرام
+    existing = db().execute("SELECT 1 FROM numbers WHERE phone=? AND platform LIKE 'telegram%' AND status='available'", (phone,)).fetchone()
     if existing:
-        flash("هذا الرقم معروض للبيع بالفعل في المتجر.", "error")
+        flash("هذا الرقم معروض للبيع بالفعل في منصة تيليجرام.", "error")
         return redirect(url_for("sell"))
     
     # طلب الكود من تيليجرام
@@ -5180,9 +5378,13 @@ def admin_tg_add():
     if not re.match(r"^\+\d{7,15}$", phone):
         flash("رقم غير صالح. مثال: +967777123456", "error")
         return redirect(url_for("admin_tg"))
-    existing = db().execute("SELECT 1 FROM numbers WHERE phone=? AND status IN ('available','pending') LIMIT 1", (phone,)).fetchone()
+    # إصلاح: الفحص يتم فقط ضمن نفس المنصة (تيليجرام) عشان نسمح بنفس الرقم في الواتساب
+    existing = db().execute(
+        "SELECT 1 FROM numbers WHERE phone=? AND platform LIKE 'telegram%' AND status IN ('available','pending') LIMIT 1",
+        (phone,)
+    ).fetchone()
     if existing:
-        flash("الرقم موجود حالياً (معروض أو قيد التأكيد)", "error")
+        flash("الرقم موجود حالياً في منصة تيليجرام (معروض أو قيد التأكيد)", "error")
         return redirect(url_for("admin_tg"))
     country = _tg_country(phone)
     cur = db().execute("INSERT INTO numbers(platform,country,phone,price,status) VALUES(?,?,?,0,'pending')",
@@ -5526,9 +5728,19 @@ def mask_phone(phone):
     if not phone: return ""
     clean = str(phone).replace(" ", "").replace("-", "")
     if len(clean) < 7: return clean
-    prefix = clean[:5]
+    
+    prefix = clean[:4]
     suffix = clean[-3:]
-    lock_svg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin:0 6px;opacity:0.7"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+    
+    lock_svg = (
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" '
+        'style="display:inline-block; vertical-align:middle; margin:0 4px; opacity:0.85; color:var(--primary2);">'
+        '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>'
+        '<path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
+        '</svg>'
+    )
+    
     return prefix + lock_svg + suffix
 
 
@@ -5623,8 +5835,36 @@ def get_country_flag(phone):
     return "", ""
 
 
+def get_live_events():
+    events = []
+    try:
+        sales = db().execute("""
+            SELECT u.username, n.country FROM numbers n 
+            JOIN users u ON u.user_id = n.buyer_id 
+            WHERE n.status='sold' AND n.sold_at IS NOT NULL
+            ORDER BY n.sold_at DESC LIMIT 5
+        """).fetchall()
+        for s in sales:
+            events.append({"type": "buy", "user": str(s['username']), "text": "رقم " + str(s['country'])})
+        
+        deposits = db().execute("""
+            SELECT u.username, d.amount_usd FROM deposits d 
+            JOIN users u ON u.user_id = d.user_id 
+            WHERE d.status='approved' AND d.processed_at IS NOT NULL
+            ORDER BY d.processed_at DESC LIMIT 5
+        """).fetchall()
+        for d in deposits:
+            events.append({"type": "deposit", "user": str(d['username']), "text": "$" + "{:.2f}".format(d['amount_usd'])})
+    except Exception as e:
+        print("[LIVE-EVENTS] " + str(e))
+    
+    if not events:
+        events = [{"type": "info", "user": "متجر مطري", "text": "تسليم فوري وأرقام موثوقة 100%"}]
+    return events
+
 def page(name, active="", **ctx):
     u = current_user()
+    ticker_code = ""  # تعريف آمن لتجنب UnboundLocalError
     # تحويل الرسائل إلى Toasts أنيقة
     flash_messages = get_flashed_messages(with_categories=True)
     fh = ""
@@ -5634,6 +5874,80 @@ def page(name, active="", **ctx):
         bg = "rgba(16,185,129,0.1)" if c == "success" else ("rgba(239,68,68,0.1)" if c == "error" else "rgba(99,102,241,0.1)")
         border = "rgba(16,185,129,0.3)" if c == "success" else ("rgba(239,68,68,0.3)" if c == "error" else "rgba(99,102,241,0.3)")
         fh += f'''<div class="toast-message" style="display:flex;align-items:center;gap:12px;background:{bg};border:1px solid {border};padding:14px 18px;border-radius:14px;margin-bottom:10px;color:{color};font-weight:600;font-size:14px;animation: slideDown 0.4s ease; position: relative; backdrop-filter: blur(10px);"><div style="flex-shrink:0;">{ico(icon, 20)}</div><div style="flex:1; line-height:1.5;">{m}</div><button onclick="this.parentElement.style.display='none'" style="background:none;border:none;color:{color};cursor:pointer;opacity:0.6;padding:0;display:flex;">{ico("x", 18)}</button></div>'''
+
+    ticker_template = """<div id="liveTicker" style="position:fixed;top:75px;left:50%;transform:translateX(-50%) translateY(-30px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px 24px;background:rgba(20,20,40,0.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1.5px solid rgba(251,191,36,0.4);border-radius:50px;box-shadow:0 10px 40px rgba(0,0,0,0.6), 0 0 30px rgba(251,191,36,0.15);opacity:0;transition:all 0.5s cubic-bezier(0.4,0,0.2,1);max-width:92vw;overflow:hidden;">
+    <div id="tickerInner" style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        <svg id="tickerIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+        <span id="tickerMsg" style="color:#e8e8f5;"></span>
+    </div>
+</div>
+<script>
+(function() {
+    var ticker = document.getElementById('liveTicker');
+    if (!ticker) return;
+    
+    // ميزة 20 عملية يومياً
+    var today = new Date().toDateString();
+    var storedDate = localStorage.getItem('tickerDate');
+    var viewCount = parseInt(localStorage.getItem('tickerViewCount') || '0');
+    if (storedDate !== today) { viewCount = 0; localStorage.setItem('tickerDate', today); }
+    if (viewCount >= 20) { ticker.remove(); return; }
+    viewCount++;
+    localStorage.setItem('tickerViewCount', viewCount.toString());
+
+    var events = __EVENTS_JSON__;
+    var msg = document.getElementById('tickerMsg');
+    var icon = document.getElementById('tickerIcon');
+    var inner = document.getElementById('tickerInner');
+    
+    // دالة تحويل البيانات لنص وألوان
+    function renderEvent(ev) {
+        var bg, border, iconColor, label;
+        if (ev.type === 'buy') {
+            bg = 'rgba(16,185,129,0.15)';
+            border = 'rgba(16,185,129,0.4)';
+            iconColor = '#10b981';
+            label = 'قام <b style="color:#fbbf24;">' + ev.user + '</b> بشراء ' + ev.text + ' بنجاح';
+            icon.innerHTML = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>';
+        } else if (ev.type === 'deposit') {
+            bg = 'rgba(99,102,241,0.15)';
+            border = 'rgba(99,102,241,0.4)';
+            iconColor = '#818cf8';
+            label = 'تم شحن <b style="color:#fbbf24;">' + ev.text + '</b> لحساب <b style="color:#fbbf24;">' + ev.user + '</b>';
+            icon.innerHTML = '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>';
+        } else {
+            bg = 'rgba(251,191,36,0.15)';
+            border = 'rgba(251,191,36,0.4)';
+            iconColor = '#fbbf24';
+            label = '<b>' + ev.user + '</b>: ' + ev.text;
+            icon.innerHTML = '<path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z"/>';
+        }
+        ticker.style.background = 'linear-gradient(135deg, rgba(20,20,40,0.95), ' + bg + ')';
+        ticker.style.borderColor = border;
+        icon.style.stroke = iconColor;
+        msg.innerHTML = label;
+    }
+    
+    renderEvent(events[0]);
+    setTimeout(function() { ticker.style.transform = 'translateX(-50%) translateY(0)'; ticker.style.opacity = '1'; }, 100);
+    
+    var idx = 0;
+    var swap = setInterval(function() {
+        idx = (idx + 1) % events.length;
+        msg.style.opacity = '0';
+        setTimeout(function() {
+            renderEvent(events[idx]);
+            msg.style.opacity = '1';
+        }, 300);
+    }, 3500);
+    
+    setTimeout(function() {
+        clearInterval(swap);
+        ticker.style.transform = 'translateX(-50%) translateY(-30px)';
+        ticker.style.opacity = '0';
+    }, 20000);
+})();
+</script>"""
     body = ""
     
     # لو الصفحة جاية بـ body جاهز، نستخدمه على طول
@@ -5652,6 +5966,7 @@ def page(name, active="", **ctx):
   <style>{CSS}</style>
 </head>
 <body>
+{ticker_code}
 {_nav(u)}
 {_bottom_nav(u, active)}
 <div class="container" style="padding-top:16px;padding-bottom:0">{fh}</div>
@@ -5667,8 +5982,8 @@ def page(name, active="", **ctx):
 <script>{JS}</script>
 <script>
 (function() {{
-    // الصفحات اللي بتتحدث تلقائياً
-    var autoRefreshPages = ['index', 'store', 'dashboard', 'referral', 'my_numbers', 'deposit_menu', 'buy'];
+    // إصلاح: إيقاف التحديث التلقائي لتحسين سلاسة الموقع (120Hz Smooth)
+    var autoRefreshPages = [];
     var currentPage = '{name}';
     
     if (autoRefreshPages.indexOf(currentPage) === -1) return;
@@ -5724,8 +6039,10 @@ def page(name, active="", **ctx):
         cards = ""
         for n in ctx.get("numbers", []):
             masked = mask_phone(n["phone"])
-            platform_color = "var(--success)" if n["platform"] == "whatsapp" else "var(--primary2)"
-            _pl = "whatsapp" if n["platform"] == "whatsapp" else "telegram"
+            _plat_lower = str(n["platform"]).lower()
+            is_whatsapp = "whatsapp" in _plat_lower
+            platform_color = "var(--success)" if is_whatsapp else "var(--primary2)"
+            _pl = "whatsapp" if is_whatsapp else "telegram"
             platform_icon = site_icon(_pl, 16, ico(_pl, 16))
             cards += f'''
             <div class="card" style="display:flex; align-items:center; justify-content:space-between; padding:16px; margin-bottom:12px; background:linear-gradient(145deg, var(--card), var(--card2)); border-left:4px solid {platform_color};">
@@ -5873,17 +6190,22 @@ def page(name, active="", **ctx):
         
         # الصف الثاني: بيع رقم
         row2 = f'''<div style="display:flex; margin-bottom:24px;">
-            <a href="/sell" style="flex:1; display:flex; align-items:center; justify-content:center; gap:8px; padding:16px; font-size:15px; font-weight:900; background:linear-gradient(135deg, #f59e0b, #ea580c); color:#fff; border-radius:14px; box-shadow: 0 6px 20px rgba(245,158,11,0.4); text-decoration:none; transition: transform 0.2s;">{sell_icon} <span>بيع رقم</span></a>
+            <a href="/sell" onmousedown="this.style.transform='scale(0.93)'; this.style.boxShadow='0 0 25px rgba(99,102,241,0.7)';" onmouseup="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 20px rgba(99,102,241,0.15)';" ontouchstart="this.style.transform='scale(0.93)'; this.style.boxShadow='0 0 25px rgba(99,102,241,0.7)';" ontouchend="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 20px rgba(99,102,241,0.15)';" style="flex:1; display:flex; align-items:center; justify-content:center; gap:10px; padding:16px; font-size:15px; font-weight:900; background:rgba(99,102,241,0.1); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border:2px solid rgba(99,102,241,0.5); color:#818cf8; border-radius:50px; box-shadow:0 4px 20px rgba(99,102,241,0.15); text-decoration:none; transition:all 0.2s;">
+<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M2.5 12.5 V21.5"/>
+<path d="M5.5 13 H10.5 A2 2 0 0 1 10.5 17 H8"/>
+<path d="M5.5 21 H12.5 A2 2 0 0 0 13.62 20.66 L19.9 16.4 A1.75 1.75 0 0 0 18 13.5 L12.5 16.5"/>
+<path d="M20 4.5 A5 2.5 0 1 1 10 4.5 A5 2.5 0 1 1 20 4.5 Z"/>
+<path d="M10 4.5 V8 A5 2.5 0 0 0 20 8 V4.5"/>
+</svg>
+<span>بيع رقم</span></a>
+
         </div>'''
 
 
         # بناء الكروت (كل دولة كارت منفصل، تحته)
-        all_nums_for_display = db().execute(
-            "SELECT * FROM numbers WHERE status='available'" +
-            (" AND platform=?" if ctx["cur_platform"] else "") +
-            " ORDER BY country ASC, id DESC",
-            ((ctx["cur_platform"],) if ctx["cur_platform"] else ())
-        ).fetchall()
+        # إصلاح: الاعتماد على الأرقام المجلوبة من الـ route مباشرة (ctx)
+        all_nums_for_display = ctx.get("numbers", [])
         
         countries_dict = {}
         for n in all_nums_for_display:
@@ -5893,7 +6215,7 @@ def page(name, active="", **ctx):
             countries_dict[c].append(n)
         
         if not countries_dict:
-            carousel_html = '<div class="card" style="text-align:center;padding:40px 20px;background:linear-gradient(145deg, var(--card) 0%, var(--card2) 100%);border:2px dashed var(--border);"><div style="font-size:48px;color:var(--muted);margin-bottom:16px;opacity:0.5;">' + ico("search", 48) + '</div><div style="font-size:18px;font-weight:900;color:var(--text);margin-bottom:8px;">لا توجد أرقام متاحة</div><div style="font-size:14px;color:var(--muted);margin-bottom:20px;">جرب تصفح منصة أخرى أو ابحث بكلمة مختلفة.</div><a href="/store" class="btn btn-sm" style="padding:10px 20px;">إعادة تعيين الفلاتر</a></div>'
+            carousel_html = '<div class="card" style="text-align:center;padding:20px;background:linear-gradient(145deg, var(--card) 0%, var(--card2) 100%);border:1px solid var(--border);border-radius:20px;margin-top:20px;"><div class="empty-search-pulse" style="display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;background:rgba(99,102,241,0.1);border-radius:50%;margin-bottom:10px;color:var(--primary2);"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><div style="font-size:15px;font-weight:900;color:var(--text);margin-bottom:4px;">لا توجد أرقام متاحة</div><div style="font-size:11px;color:var(--muted);">سيتم تحديث المتجر قريباً إن شاء الله</div></div><style>@keyframes empty-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.7; } } .empty-search-pulse { animation: empty-pulse 2s ease-in-out infinite; }</style>'
         else:
             country_cards = []
             for c_idx, (c_name, nums) in enumerate(countries_dict.items()):
@@ -5980,11 +6302,11 @@ def page(name, active="", **ctx):
                     + slides_inner +
                     '</div>'
                     '<div style="display:flex; justify-content:center; align-items:center; gap:12px; margin-top:12px;">'
-                    f'<button type="button" onclick="numPrev(\'{carousel_id}\')" style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:6px 12px; border-radius:8px; cursor:pointer;">'
+                    f'<button type="button" onclick="numPrev(\'{carousel_id}\')" class="carousel-arrow" style="background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.4);padding:8px 14px;border-radius:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:44px;height:40px;">'
                     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
                     '</button>'
-                    f'<div id="{counter_id}" style="font-size:12px; font-weight:800; color:var(--text); background:var(--card); border:1px solid var(--border); padding:6px 14px; border-radius:8px; min-width:60px; text-align:center;">1 / {total_nums}</div>'
-                    f'<button type="button" onclick="numNext(\'{carousel_id}\')" style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:6px 12px; border-radius:8px; cursor:pointer;">'
+                    f'<div id="{counter_id}" style="font-size:14px;font-weight:900;color:#fff;background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);padding:8px 18px;border-radius:12px;min-width:70px;text-align:center;">1 / {total_nums}</div>'
+                    f'<button type="button" onclick="numNext(\'{carousel_id}\')" class="carousel-arrow" style="background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.4);padding:8px 14px;border-radius:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:44px;height:40px;">'
                     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'
                     '</button>'
                     '</div>'
@@ -6030,9 +6352,10 @@ def page(name, active="", **ctx):
 
         # بناء شريط فلاتر الدول
         body = f'''<div class="container" style="padding-top:16px">
-          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            المتجر <span class="section-sub">({ctx["total"]} رقم)</span>
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            المتجر <span class="section-sub">({ctx["total"]} رقم متاح)</span>
           </div>
+          
 
 
           {row1}
@@ -6093,8 +6416,9 @@ def page(name, active="", **ctx):
             <h2 style="font-size:16px; margin:0; font-weight:900;">{n["country"]}</h2>
           </div>
           
-          <div style="font-family:monospace; font-size:14px; direction:ltr; text-align:left; color:var(--muted); margin-bottom:12px; background:rgba(0,0,0,0.2); padding:6px 10px; border-radius:8px; border:1px solid var(--border);">
-            {n["phone"]}
+          <div style="font-family:monospace; font-size:16px; direction:ltr; text-align:left; color:var(--muted); margin-bottom:12px; background:rgba(0,0,0,0.2); padding:12px 14px; border-radius:10px; border:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <span style="display:inline-flex; align-items:center;">{mask_phone(n["phone"])}</span>
+            <span style="font-size:11px; color:#ef4444; font-weight:800; background:rgba(239,68,68,0.08); padding:4px 10px; border-radius:8px; display:inline-flex; align-items:center; gap:4px; border: 1px solid rgba(239,68,68,0.2);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> يُكشف بعد الشراء</span>
           </div>
 
           {coupon_html}
@@ -6840,7 +7164,6 @@ def page(name, active="", **ctx):
             opacity: 1;
           }}
           .password-toggle:active {{
-            transform: scale(0.9);
           }}
           .register-btn {{
             width: 100%;
@@ -7119,7 +7442,6 @@ def page(name, active="", **ctx):
             opacity: 1;
           }}
           .login-field .password-toggle:active {{
-            transform: scale(0.9);
           }}
           .login-btn {{
             width: 100%;
@@ -7844,7 +8166,7 @@ def page(name, active="", **ctx):
             {tile("/admin/tickets", "التذاكر", '<svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>', "var(--danger)", unread_messages)}
             {tile("/admin/stats", "الإحصائيات", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>', "var(--primary2)")}
             {tile("/admin/audit", "سجل النشاط", '<svg viewBox="0 0 24 24" fill="none" stroke="#8888aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>', "var(--muted)")}
-            {tile("/admin/backup/download", "نسخة احتياطية", '<svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>', "var(--success)")}
+            {tile("/admin/backup/auto_download", "نسخة احتياطية", '<svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>', "var(--success)")}
             {tile("/admin/backup/restore", "استعادة نسخة", '<svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>', "var(--danger)")}
             {tile("/admin/notifications", "الإشعارات", '<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>', "var(--warn)")}
             {tile("/admin/settings", "الإعدادات", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>', "var(--primary2)")}
@@ -8617,6 +8939,79 @@ function changePlatform(nid) {
     if ann_text:
         announcement_html = f'<div class="container" style="padding-top:16px;padding-bottom:0"><div class="flash {ann_level}">{ann_text}</div></div>'
 
+    # عرض الشريط فقط في الصفحة الرئيسية
+    if name == "index":
+        events_list = get_live_events()
+        import json as _json
+        ticker_code = ticker_template.replace("__EVENTS_JSON__", _json.dumps(events_list, ensure_ascii=False))
+    else:
+        ticker_code = ""
+    
+    # توليد الشريط للصفحة الرئيسية فقط
+    if name == "index":
+        try:
+            events_list = get_live_events()
+            import json as _json
+            ticker_template = '''<div id="liveTicker" style="position:fixed;top:75px;left:50%;transform:translateX(-50%) translateY(-30px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px 24px;background:rgba(20,20,40,0.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1.5px solid rgba(251,191,36,0.4);border-radius:50px;box-shadow:0 10px 40px rgba(0,0,0,0.6), 0 0 30px rgba(251,191,36,0.15);opacity:0;transition:all 0.5s cubic-bezier(0.4,0,0.2,1);max-width:92vw;overflow:hidden;">
+    <div id="tickerInner" style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        <svg id="tickerIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+        <span id="tickerMsg" style="color:#e8e8f5;"></span>
+    </div>
+</div>
+<script>
+(function() {
+    var ticker = document.getElementById('liveTicker');
+    if (!ticker) return;
+    var today = new Date().toDateString();
+    var storedDate = localStorage.getItem('tickerDate');
+    var viewCount = parseInt(localStorage.getItem('tickerViewCount') || '0');
+    if (storedDate !== today) { viewCount = 0; localStorage.setItem('tickerDate', today); }
+    if (viewCount >= 20) { ticker.remove(); return; }
+    viewCount++;
+    localStorage.setItem('tickerViewCount', viewCount.toString());
+    var events = __EVENTS_JSON__;
+    var msg = document.getElementById('tickerMsg');
+    var icon = document.getElementById('tickerIcon');
+    function renderEvent(ev) {
+        var bg, border, iconColor, label;
+        if (ev.type === 'buy') {
+            bg = 'rgba(16,185,129,0.15)'; border = 'rgba(16,185,129,0.4)'; iconColor = '#10b981';
+            label = 'قام <b style="color:#fbbf24;">' + ev.user + '</b> بشراء ' + ev.text + ' بنجاح';
+            icon.innerHTML = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>';
+        } else if (ev.type === 'deposit') {
+            bg = 'rgba(99,102,241,0.15)'; border = 'rgba(99,102,241,0.4)'; iconColor = '#818cf8';
+            label = 'تم شحن <b style="color:#fbbf24;">' + ev.text + '</b> لحساب <b style="color:#fbbf24;">' + ev.user + '</b>';
+            icon.innerHTML = '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>';
+        } else {
+            bg = 'rgba(251,191,36,0.15)'; border = 'rgba(251,191,36,0.4)'; iconColor = '#fbbf24';
+            label = '<b>' + ev.user + '</b>: ' + ev.text;
+            icon.innerHTML = '<path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z"/>';
+        }
+        ticker.style.background = 'linear-gradient(135deg, rgba(20,20,40,0.95), ' + bg + ')';
+        ticker.style.borderColor = border;
+        icon.style.stroke = iconColor;
+        msg.innerHTML = label;
+    }
+    renderEvent(events[0]);
+    setTimeout(function() { ticker.style.transform = 'translateX(-50%) translateY(0)'; ticker.style.opacity = '1'; }, 100);
+    var idx = 0;
+    var swap = setInterval(function() {
+        idx = (idx + 1) % events.length;
+        msg.style.opacity = '0';
+        setTimeout(function() { renderEvent(events[idx]); msg.style.opacity = '1'; }, 300);
+    }, 3500);
+    setTimeout(function() {
+        clearInterval(swap);
+        ticker.style.transform = 'translateX(-50%) translateY(-30px)';
+        ticker.style.opacity = '0';
+    }, 20000);
+})();
+</script>'''
+            ticker_code = ticker_template.replace("__EVENTS_JSON__", _json.dumps(events_list, ensure_ascii=False))
+        except Exception as e:
+            print(f"[TICKER] خطأ: {e}")
+            ticker_code = ""
+
     return f'''<!DOCTYPE html>
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
@@ -8636,6 +9031,7 @@ function changePlatform(nid) {
   <style>{CSS}</style>
 </head>
 <body>
+{ticker_code}
 {_nav(u)}
 {_bottom_nav(u, active)}
 {announcement_html}
@@ -9630,6 +10026,158 @@ def my_pending_sales():
 
 
 # ============================================================
+# النسخ الاحتياطي التلقائي (خلفية)
+# ============================================================
+BACKUP_DIR = os.path.join(BASE_DIR, "backups", "auto")
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+import threading
+_backup_lock = threading.Lock()
+_last_backup_time = 0
+_backup_timer = None
+
+def _create_zip_backup_internal():
+    """دالة مساعدة: تنشئ ZIP كامل وترجع (ok, path)"""
+    try:
+        import zipfile
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        temp_db = os.path.join(BACKUP_DIR, "_temp_" + ts + ".db")
+        src = sqlite3.connect(DB_PATH, timeout=30)
+        dst = sqlite3.connect(temp_db)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+        
+        bak_file = os.path.join(BACKUP_DIR, "matari_event_" + ts + ".zip")
+        with zipfile.ZipFile(bak_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(temp_db, "matari.db")
+            if os.path.exists(os.path.join(BASE_DIR, "web.py")):
+                zf.write(os.path.join(BASE_DIR, "web.py"), "web.py")
+            static_dir = os.path.join(BASE_DIR, "static")
+            if os.path.exists(static_dir):
+                for root, dirs, files in os.walk(static_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, BASE_DIR)
+                        zf.write(full_path, rel_path)
+        try: os.remove(temp_db)
+        except: pass
+        log.info("ZIP للحدث تم إنشاؤه: %s", bak_file)
+        return True, bak_file
+    except Exception as e:
+        log.error(f"فشل ZIP للحدث: {e}")
+        return False, str(e)
+
+def _send_backup_to_telegram(bak_file):
+    """يرسل ملف النسخة إلى تيليجرام في الخلفية."""
+    try:
+        import requests
+        token = os.environ.get("BACKUP_BOT_TOKEN") or DEFAULT_SETTINGS.get("BACKUP_BOT_TOKEN", "")
+        chat_id = os.environ.get("BACKUP_CHAT_ID") or DEFAULT_SETTINGS.get("BACKUP_CHAT_ID", "")
+        if token and chat_id and "ضع_" not in token:
+            with open(bak_file, "rb") as f:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/sendDocument",
+                    data={"chat_id": chat_id, "caption": "📦 نسخة احتياطية جديدة (حدث جديد)"},
+                    files={"document": f},
+                    timeout=30
+                )
+            log.info("✅ تم إرسال النسخة إلى تيليجرام بنجاح!")
+    except Exception as e:
+        log.warning(f"فشل إرسال النسخة إلى تيليجرام: {e}")
+
+def _delayed_backup_sender():
+    """دالة داخلية تنتظر 5 ثواني قبل إرسال النسخة (حماية من إغراق البوت)."""
+    import time as _time
+    global _last_backup_time
+    _time.sleep(5)  # انتظار 5 ثواني فقط
+    with _backup_lock:
+        # لو حصل حدث جديد خلال الـ 5 ثواني، نلغي الإرسال ده وننتظر الحدث الجديد
+        if _time.time() - _last_backup_time < 5:
+            return
+    # استدعاء دالة النسخ (التي تُنشئ ZIP) ثم إرساله
+    ok, bak_file = _create_zip_backup_internal()
+    if ok:
+        _send_backup_to_telegram(bak_file)
+
+def make_safe_backup():
+    """ينشئ نسخة احتياطية ZIP كاملة (DB + web.py + static)"""
+    global _last_backup_time, _backup_timer
+    with _backup_lock:
+        _last_backup_time = __import__("time").time()
+        if _backup_timer:
+            _backup_timer.cancel()
+        _backup_timer = threading.Timer(5, _delayed_backup_sender)
+        _backup_timer.daemon = True
+        _backup_timer.start()
+    
+    try:
+        import zipfile, shutil
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # 1. نسخة آمنة من DB (في ملف مؤقت)
+        temp_db = os.path.join(BACKUP_DIR, "_temp_" + ts + ".db")
+        src = sqlite3.connect(DB_PATH, timeout=30)
+        dst = sqlite3.connect(temp_db)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+        
+        # 2. إنشاء ZIP
+        bak_file = os.path.join(BACKUP_DIR, "matari_store_" + ts + ".zip")
+        with zipfile.ZipFile(bak_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(temp_db, "matari.db")
+            if os.path.exists(os.path.join(BASE_DIR, "web.py")):
+                zf.write(os.path.join(BASE_DIR, "web.py"), "web.py")
+            static_dir = os.path.join(BASE_DIR, "static")
+            if os.path.exists(static_dir):
+                for root, dirs, files in os.walk(static_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, BASE_DIR)
+                        zf.write(full_path, rel_path)
+        
+        # حذف ملف DB المؤقت
+        try: os.remove(temp_db)
+        except: pass
+        
+        log.info("نسخة احتياطية ZIP تم إنشاؤها: %s", bak_file)
+        
+        # مسح النسخ القديمة (نحتفظ بآخر 10 نسخ فقط)
+        files = sorted([f for f in os.listdir(BACKUP_DIR) if f.endswith(".zip")])
+        if len(files) > 10:
+            for old in files[:-10]:
+                try: os.remove(os.path.join(BACKUP_DIR, old))
+                except: pass
+        return True, bak_file
+    except Exception as e:
+        log.error("فشل النسخ الاحتياطي: %s", e)
+        return False, str(e)
+
+def daily_backup_worker():
+    """Thread يشتغل كل 24 ساعة لعمل نسخة."""
+    import time as _time
+    _time.sleep(10) # انتظار بدء السيرفر
+    while True:
+        try:
+            make_safe_backup()
+        except: pass
+        _time.sleep(86400) # 24 ساعة
+
+# إضافة المسار لتحميل النسخ على الهاتف
+@app.route("/admin/backup/auto_download")
+@admin_required
+def admin_backup_auto_download():
+    ok, res = make_safe_backup()
+    if not ok:
+        flash("فشل إنشاء النسخة: " + str(res), "error")
+        return redirect(url_for("admin_settings"))
+    from flask import send_file
+    return send_file(res, as_attachment=True, download_name="matari_store_backup.db")
+
+# ============================================================
 # التهيئة والتشغيل (يعمل مع gunicorn على Render وكذلك مع python web.py)
 # ============================================================
 def bootstrap_database():
@@ -9666,6 +10214,10 @@ if os.environ.get("MATARI_AUTOPAY", "1") == "1":
         start_auto_pay_worker()
     except Exception:
         log.exception("فشل تشغيل worker الدفع التلقائي")
+
+    # تشغيل خلفية النسخ الاحتياطي اليومي
+    import threading
+    threading.Thread(target=daily_backup_worker, daemon=True).start()
 
 if __name__ == "__main__":
     log.info("تشغيل السيرفر المحلي على المنفذ %s", PORT)
