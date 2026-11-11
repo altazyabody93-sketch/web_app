@@ -1866,6 +1866,82 @@ function fetchOTP(nid){
 }
 
 // ============================================================
+// مؤشر FPS (يعرض الإطارات في الثانية في أي مكان)
+// ============================================================
+(function() {
+    // نتأكد إن المؤشر مش موجود
+    if (document.getElementById('fpsMeter')) return;
+    
+    // نضيف الستايل
+    var style = document.createElement('style');
+    style.textContent = '' +
+        '#fpsMeter { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 99998; font-family: monospace; font-size: 10px; font-weight: 900; padding: 3px 10px; border-radius: 10px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: flex; align-items: center; gap: 3px; cursor: pointer; transition: all 0.3s; border: 1px solid; user-select: none; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }' +
+        '#fpsMeter.good { background: rgba(16,185,129,0.2); color: #10b981; border-color: rgba(16,185,129,0.5); }' +
+        '#fpsMeter.medium { background: rgba(245,158,11,0.2); color: #f59e0b; border-color: rgba(245,158,11,0.5); }' +
+        '#fpsMeter.bad { background: rgba(239,68,68,0.2); color: #ef4444; border-color: rgba(239,68,68,0.5); }' +
+        '#fpsMeter.hidden { display: none; }';
+    document.head.appendChild(style);
+    
+    // نضيف المؤشر
+    var fpsEl = document.createElement('div');
+    fpsEl.id = 'fpsMeter';
+    fpsEl.className = 'good';
+    fpsEl.title = 'اضغط لإخفاء المؤشر (اضغط مطولاً لإظهاره تاني)';
+    fpsEl.innerHTML = '<span style="font-size:9px; opacity:0.7;">FPS</span> <span id="fpsValue">60</span>';
+    document.body.appendChild(fpsEl);
+    
+    // دالة قياس FPS
+    var frames = 0;
+    var lastTime = performance.now();
+    var fpsValue = document.getElementById('fpsValue');
+    var fpsMeter = document.getElementById('fpsMeter');
+    
+    function updateFPS() {
+        var now = performance.now();
+        var delta = now - lastTime;
+        frames++;
+        
+        if (delta >= 1000) {
+            var fps = Math.round((frames * 1000) / delta);
+            if (fpsValue) fpsValue.textContent = fps;
+            
+            // تغيير اللون حسب الأداء
+            fpsMeter.classList.remove('good', 'medium', 'bad');
+            if (fps >= 55) {
+                fpsMeter.classList.add('good');
+            } else if (fps >= 30) {
+                fpsMeter.classList.add('medium');
+            } else {
+                fpsMeter.classList.add('bad');
+            }
+            
+            frames = 0;
+            lastTime = now;
+        }
+        
+        requestAnimationFrame(updateFPS);
+    }
+    
+    requestAnimationFrame(updateFPS);
+    
+    // إخفاء/إظهار المؤشر بالضغط
+    var hideTimer = null;
+    fpsMeter.addEventListener('click', function() {
+        fpsMeter.classList.add('hidden');
+        // نضيف زر صغير لإظهاره تاني (في نفس المكان)
+        var restoreBtn = document.createElement('div');
+        restoreBtn.id = 'fpsRestore';
+        restoreBtn.style.cssText = 'position:fixed;top:140px;left:12px;z-index:99997;width:8px;height:8px;background:rgba(16,185,129,0.5);border-radius:50%;cursor:pointer;';
+        restoreBtn.title = 'إظهار مؤشر FPS';
+        restoreBtn.onclick = function() {
+            fpsMeter.classList.remove('hidden');
+            restoreBtn.remove();
+        };
+        document.body.appendChild(restoreBtn);
+    });
+})();
+
+// ============================================================
 // زر التحديث العائم (يظهر في كل الصفحات)
 // ============================================================
 (function() {
@@ -1892,6 +1968,51 @@ function fetchOTP(nid){
         setTimeout(function() { window.location.reload(); }, 300);
     };
     document.body.appendChild(btn);
+})();
+
+// ============================================================
+// تحديث مؤشر FPS (الموجود في النافبار)
+// ============================================================
+(function() {
+    var fpsValue = document.getElementById('fpsValue');
+    var fpsMeter = document.getElementById('fpsMeter');
+    if (!fpsValue || !fpsMeter) return;
+    
+    var frames = 0;
+    var lastTime = performance.now();
+    
+    function updateFPS() {
+        var now = performance.now();
+        var delta = now - lastTime;
+        frames++;
+        
+        if (delta >= 1000) {
+            var fps = Math.round((frames * 1000) / delta);
+            fpsValue.textContent = fps;
+            
+            // تغيير اللون حسب الأداء
+            if (fps >= 55) {
+                fpsMeter.style.background = 'rgba(16,185,129,0.15)';
+                fpsMeter.style.color = '#10b981';
+                fpsMeter.style.borderColor = 'rgba(16,185,129,0.4)';
+            } else if (fps >= 30) {
+                fpsMeter.style.background = 'rgba(245,158,11,0.15)';
+                fpsMeter.style.color = '#f59e0b';
+                fpsMeter.style.borderColor = 'rgba(245,158,11,0.4)';
+            } else {
+                fpsMeter.style.background = 'rgba(239,68,68,0.15)';
+                fpsMeter.style.color = '#ef4444';
+                fpsMeter.style.borderColor = 'rgba(239,68,68,0.4)';
+            }
+            
+            frames = 0;
+            lastTime = now;
+        }
+        
+        requestAnimationFrame(updateFPS);
+    }
+    
+    requestAnimationFrame(updateFPS);
 })();
 
 """
@@ -1935,6 +2056,7 @@ def _nav(u):
         '<a class="brand" href="/" onclick="toggleAdminBtn(event)" style="display:flex;align-items:center;gap:10px;cursor:pointer">'
         + logo +
         '<span class="brand-text">MATARI STORE</span>'
+        '<div id="fpsMeter" style="display: inline-flex; align-items: center; gap: 3px; font-family: monospace; font-size: 9px; font-weight: 900; padding: 2px 6px; border-radius: 6px; background: rgba(16,185,129,0.1); color: #10b981; border: 1px solid rgba(16,185,129,0.3); margin-right: 6px; user-select: none;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> <span id="fpsValue">60</span></div>'
         '</a>'
         '<div style="display:flex;align-items:center;gap:8px">'
         + admin_btn +
@@ -10180,6 +10302,78 @@ def admin_backup_auto_download():
 # ============================================================
 # التهيئة والتشغيل (يعمل مع gunicorn على Render وكذلك مع python web.py)
 # ============================================================
+def ensure_schema():
+    """تتأكد من وجود جميع الأعمدة والجداول المطلوبة، وتضيف أي ناقص تلقائياً.
+    تشتغل في كل مرة يقوم فيها التطبيق (Restart)، بدون الاعتماد على auto_fix_db."""
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=30)
+        con.row_factory = sqlite3.Row
+        
+        # قائمة بكل الجداول والأعمدة المطلوبة
+        needed_columns = [
+            # جدول users
+            ("users", "avatar", "TEXT"),
+            ("users", "captcha_passed", "INTEGER DEFAULT 0"),
+            ("users", "last_bonus", "TEXT"),
+            ("users", "total_spent", "REAL DEFAULT 0"),
+            ("users", "bad_coupons", "INTEGER DEFAULT 0"),
+            ("users", "referral_earnings", "REAL DEFAULT 0.0"),
+            ("users", "custom_id", "TEXT"),
+            # جدول numbers
+            ("numbers", "seen_by_buyer", "INTEGER DEFAULT 0"),
+            ("numbers", "request_time", "TEXT"),
+            ("numbers", "two_fa_password", "TEXT"),
+            ("numbers", "is_premium", "INTEGER DEFAULT 0"),
+            ("numbers", "paid_price", "REAL"),
+            ("numbers", "session_string", "TEXT"),
+            ("numbers", "last_code", "TEXT"),
+            # جدول ticket_messages
+            ("ticket_messages", "is_read", "INTEGER DEFAULT 0"),
+            # جدول announcements - الأعمدة المهمة
+            ("announcements", "text_color", "TEXT DEFAULT '#e8e8f5'"),
+            ("announcements", "font_size", "TEXT DEFAULT '15px'"),
+            ("announcements", "icon", "TEXT DEFAULT 'bell'"),
+            ("announcements", "icon_name", "TEXT DEFAULT 'bell'"),
+            ("announcements", "is_active", "INTEGER DEFAULT 1"),
+            ("announcements", "btn_text", "TEXT DEFAULT ''"),
+            ("announcements", "btn_url", "TEXT DEFAULT ''"),
+            # جدول buy_prices
+            ("buy_prices", "code", "TEXT DEFAULT ''"),
+            ("buy_prices", "flag", "TEXT DEFAULT ''"),
+        ]
+        
+        added = 0
+        for table, col, decl in needed_columns:
+            try:
+                cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+                if not cols:
+                    # الجدول مش موجود، نتخطاه (init_db هتنشئه)
+                    continue
+                if col not in cols:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                    added += 1
+                    log.info(f"[ENSURE-SCHEMA] added {table}.{col}")
+            except sqlite3.OperationalError as e:
+                log.warning(f"[ENSURE-SCHEMA] error on {table}.{col}: {e}")
+        
+        # إنشاء جداول ناقصة
+        con.execute("CREATE TABLE IF NOT EXISTS pending_sellers (number_id INTEGER, user_id INTEGER, created_at TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS pending_balance (user_id INTEGER, amount REAL, number_id INTEGER, created_at TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS code_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, number_id INTEGER, phone TEXT, code TEXT, platform TEXT, created_at TEXT DEFAULT (datetime('now')))")
+        
+        con.commit()
+        con.close()
+        
+        if added > 0:
+            log.info(f"[ENSURE-SCHEMA] Fixed {added} columns.")
+        else:
+            log.info("[ENSURE-SCHEMA] Database is up to date.")
+        return True
+    except Exception as e:
+        log.exception(f"[ENSURE-SCHEMA] Fatal error: {e}")
+        return False
+
+
 def bootstrap_database():
     """تهيئة آمنة وقابلة للتكرار: تنشئ المجلدات والجداول والأعمدة الناقصة."""
     for d in ("static/icons", "static/avatars"):
@@ -10193,6 +10387,12 @@ def bootstrap_database():
         log.info("قاعدة البيانات جاهزة: %s", DB_PATH)
     except Exception:
         log.exception("فشل init_db")
+    
+    # تأكد من الأعمدة المطلوبة (حتى لو auto_fix_db فشلت)
+    try:
+        ensure_schema()
+    except Exception:
+        log.exception("فشل ensure_schema")
 
     for name, fn in (("auto_fix_db", auto_fix_db),
                      ("seed_buy_prices", seed_buy_prices),
