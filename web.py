@@ -284,6 +284,11 @@ CREATE TABLE IF NOT EXISTS announcements(
   text TEXT NOT NULL,
   level TEXT DEFAULT 'info',
   is_active INTEGER DEFAULT 1,
+  text_color TEXT DEFAULT '#e8e8f5',
+  font_size TEXT DEFAULT '15px',
+  icon TEXT DEFAULT 'bell',
+  btn_text TEXT DEFAULT '',
+  btn_url TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS site_icons(
@@ -8297,6 +8302,7 @@ def page(name, active="", **ctx):
             {tile("/admin/buy-prices", "أسعار الشراء", '<svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>', "var(--success)")}
             {tile("/admin/pending_sellers", "أرقام المستخدمين", '<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>', "var(--warn)", pending_numbers)}
             {tile("/admin/sold", "الأرقام المباعة", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', "var(--primary2)")}
+            {tile("/admin/database", "إدارة قاعدة البيانات", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>', "var(--primary)")}
           </div>
         </div>'''
         body += _BACKUP_PROGRESS_BLOCK
@@ -10374,6 +10380,824 @@ def ensure_schema():
         return False
 
 
+# ============================================================
+# الإصلاح الذاتي للمخطط (Self-Healing Schema) + إدارة قاعدة البيانات
+# ============================================================
+# تعمل: عند التشغيل (bootstrap_database) + قبل كل طلب إذا تغير ملف الداتابيز
+# (مثلاً بعد استعادة نسخة قديمة) — وتعمل بنفس الطريقة مع Flask dev و Gunicorn.
+# لا تحذف أي بيانات أبداً. كل عملية إعادة بناء تأخذ نسخة احتياطية أولاً وتتم داخل transaction.
+_SCHEMA_LOCK = threading.RLock()
+_schema_sig_seen = None
+_pending_features = []
+_last_heal_report = {"at": None, "ok": None, "actions": [], "warnings": []}
+_db_last_action = {"title": "", "ok": None, "lines": []}
+
+_SQL_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_SQL_TYPES = ("TEXT", "INTEGER", "REAL", "NUMERIC", "BLOB")
+
+# جداول النظام الجديدة (تُنشأ تلقائياً من الإصلاح الذاتي)
+META_SCHEMA = """
+CREATE TABLE IF NOT EXISTS db_changelog(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  table_name TEXT,
+  column_name TEXT,
+  details TEXT,
+  source TEXT DEFAULT 'system',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS feature_registry(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feature_name TEXT NOT NULL,
+  table_name TEXT,
+  column_name TEXT,
+  status TEXT DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+# أعمدة يحتاجها الكود ولم تكن في تعريف SCHEMA القديم (تُضاف لو ناقصة)
+EXTRA_COLUMNS = [
+    ("users", "avatar", "TEXT"),
+    ("users", "captcha_passed", "INTEGER DEFAULT 0"),
+    ("users", "last_bonus", "TEXT"),
+    ("users", "total_spent", "REAL DEFAULT 0"),
+    ("users", "bad_coupons", "INTEGER DEFAULT 0"),
+    ("users", "referral_earnings", "REAL DEFAULT 0.0"),
+    ("users", "custom_id", "TEXT"),
+    ("numbers", "seen_by_buyer", "INTEGER DEFAULT 0"),
+    ("numbers", "request_time", "TEXT"),
+    ("numbers", "two_fa_password", "TEXT"),
+    ("numbers", "is_premium", "INTEGER DEFAULT 0"),
+    ("numbers", "paid_price", "REAL"),
+    ("numbers", "session_string", "TEXT"),
+    ("numbers", "last_code", "TEXT"),
+    ("ticket_messages", "is_read", "INTEGER DEFAULT 0"),
+    ("announcements", "text_color", "TEXT DEFAULT '#e8e8f5'"),
+    ("announcements", "font_size", "TEXT DEFAULT '15px'"),
+    ("announcements", "icon", "TEXT DEFAULT 'bell'"),
+    ("announcements", "icon_name", "TEXT DEFAULT 'bell'"),
+    ("announcements", "btn_text", "TEXT DEFAULT ''"),
+    ("announcements", "btn_url", "TEXT DEFAULT ''"),
+    ("buy_prices", "code", "TEXT DEFAULT ''"),
+    ("buy_prices", "flag", "TEXT DEFAULT ''"),
+]
+
+# الميزات المعروفة في الموقع (تُسجَّل تلقائياً في feature_registry)
+REGISTERED_FEATURES = [
+    ("الإشعارات", "announcements", None),
+    ("زر الإشعار - الرابط", "announcements", "btn_url"),
+    ("زر الإشعار - النص", "announcements", "btn_text"),
+    ("مراقبة الأكواد", "code_logs", None),
+    ("أسعار الشراء", "buy_prices", None),
+    ("سجل تغييرات قاعدة البيانات", "db_changelog", None),
+    ("سجل الميزات", "feature_registry", None),
+    ("النسخ الاحتياطي", None, None),
+]
+
+
+def register_feature(feature_name, table_name=None, column_name=None):
+    """ديكوريتور: يسجل الميزة في feature_registry تلقائياً عند التهيئة القادمة.
+    مثال:  @register_feature("الكوبونات", "coupons")"""
+    def deco(fn):
+        _pending_features.append((feature_name, table_name, column_name))
+        return fn
+    return deco
+
+
+def _qid(name):
+    """اقتباس اسم الجدول/العمود لـ SQL (يهرب علامات التنصيص)."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _validate_ident(name):
+    if not _SQL_IDENT.match(str(name or "")):
+        return "اسم غير صالح: '%s' (حروف إنجليزية وأرقام و _ فقط، ويبدأ بحرف)" % (name or "")
+    if str(name).lower().startswith("sqlite_"):
+        return "الأسماء التي تبدأ بـ sqlite_ محجوزة"
+    return None
+
+
+def _table_cols(con, name):
+    rows = con.execute("PRAGMA table_info(%s)" % _qid(name)).fetchall()
+    return [{"name": r[1], "type": (r[2] or "").upper(), "notnull": int(r[3]),
+             "dflt": r[4], "pk": int(r[5])} for r in rows]
+
+
+def _norm_dflt(v):
+    """توحيد القيمة الافتراضية للمقارنة ('0' و 0.0 و "0" تعتبر متساوية)."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        s = s[1:-1]
+    try:
+        return float(s)
+    except ValueError:
+        return s.upper()
+
+
+def _column_decl(col):
+    """تعريف العمود لـ ALTER TABLE ADD COLUMN (SQLite لا تقبل افتراضيات ديناميكية)."""
+    parts = [col["type"] or "TEXT"]
+    warn = None
+    dflt = col["dflt"]
+    if dflt is not None:
+        d = str(dflt).strip()
+        if d.startswith("(") or d.upper() in ("CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"):
+            warn = "افتراضي ديناميكي (%s) لا يُضاف عبر ALTER — تُرك العمود بدون افتراضي" % d
+        else:
+            parts.append("DEFAULT " + d)
+            if col["notnull"]:
+                parts.append("NOT NULL")
+    elif col["notnull"]:
+        warn = "عمود NOT NULL بدون افتراضي — أُضيف بدون NOT NULL"
+    return " ".join(parts), warn
+
+
+def _sql_literal(value):
+    v = (value or "").strip()
+    if not v:
+        return None
+    if re.match(r"^-?\d+(\.\d+)?$", v):
+        return v
+    return "'" + v.replace("'", "''") + "'"
+
+
+def _db_file_signature():
+    try:
+        st = os.stat(DB_PATH)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _reference_schema():
+    """يبني المخطط المرجعي من SCHEMA داخل ذاكرة مؤقتة (بدون لمس الداتابيز)."""
+    mem = sqlite3.connect(":memory:")
+    try:
+        mem.executescript(SCHEMA)
+        tables = {}
+        names = [r[0] for r in mem.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")]
+        for name in names:
+            sql = mem.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()[0]
+            tables[name] = {"sql": sql, "cols": _table_cols(mem, name)}
+        indexes = [(r[0], r[1]) for r in mem.execute(
+            "SELECT tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")]
+        return tables, indexes
+    finally:
+        mem.close()
+
+
+def _col_drift(rc, hc):
+    """يرجع سبب الاختلاف بين عمود المرجع والعمود الفعلي، أو None لو متطابقين."""
+    if rc["type"] != hc["type"]:
+        return "النوع %s ≠ %s" % (hc["type"] or "-", rc["type"] or "-")
+    if bool(rc["notnull"]) != bool(hc["notnull"]):
+        return "NOT NULL مختلف"
+    if bool(rc["pk"]) != bool(hc["pk"]):
+        return "المفتاح الأساسي مختلف"
+    if _norm_dflt(rc["dflt"]) != _norm_dflt(hc["dflt"]):
+        return "القيمة الافتراضية %s ≠ %s" % (hc["dflt"], rc["dflt"])
+    return None
+
+
+def _backup_db_file(tag):
+    """نسخة احتياطية من ملف الداتابيز قبل أي إعادة بناء."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(BACKUP_DIR, "pre_%s_%s.db" % (tag, ts))
+    src = sqlite3.connect(DB_PATH, timeout=30)
+    dst = sqlite3.connect(path)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    _prune_files(BACKUP_DIR, "pre_", ".db", keep=10)
+    return path
+
+
+def _prune_files(folder, prefix, suffix, keep):
+    try:
+        files = sorted(f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith(suffix))
+        for old in files[:-keep] if keep else files:
+            try:
+                os.remove(os.path.join(folder, old))
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _changelog(con, action, table=None, column=None, details="", source="system"):
+    try:
+        con.execute("INSERT INTO db_changelog(action, table_name, column_name, details, source) "
+                    "VALUES(?,?,?,?,?)", (action, table, column, str(details)[:500], source))
+    except sqlite3.OperationalError as e:
+        log.warning("[SELF-HEAL] تعذر كتابة سجل التغييرات: %s", e)
+
+
+def _heal_record(con, report, action, table, column, details):
+    msg = "%s: %s%s — %s" % (action, table, ("." + column) if column else "", details)
+    report["actions"].append(msg)
+    log.info("[SELF-HEAL] %s", msg)
+    _changelog(con, action, table, column, details, source="self_heal")
+
+
+def _heal_warn(report, msg):
+    report["warnings"].append(msg)
+    log.warning("[SELF-HEAL] %s", msg)
+
+
+def _rebuild_table(con, tname, ref, ref_indexes, report):
+    """يعيد بناء جدول بالتعريف المرجعي مع نقل كل البيانات. داخل transaction: أي خطأ = تراجع كامل."""
+    tmp = "_heal_old_" + tname
+    old_cols = _table_cols(con, tname)
+    old_names = {c["name"] for c in old_cols}
+    old_idx = [(r[0], r[1]) for r in con.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+        (tname,)).fetchall()]
+    ref_idx_sql = [sql for tbl, sql in ref_indexes if tbl == tname]
+
+    con.commit()
+    con.execute("PRAGMA legacy_alter_table=ON")   # حتى لا تتغير مراجع المفاتيح في الجداول الأخرى
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        for iname, _sql in old_idx:
+            con.execute("DROP INDEX IF EXISTS %s" % _qid(iname))
+        con.execute("ALTER TABLE %s RENAME TO %s" % (_qid(tname), _qid(tmp)))
+        con.execute(ref["sql"])
+        new_names = [c["name"] for c in _table_cols(con, tname)]
+        for oc in old_cols:
+            if oc["name"] not in new_names:
+                decl, warn = _column_decl(oc)
+                con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (_qid(tname), _qid(oc["name"]), decl))
+                new_names.append(oc["name"])
+                if warn:
+                    _heal_warn(report, "%s.%s: %s" % (tname, oc["name"], warn))
+        common = [n for n in new_names if n in old_names]
+        cl = ", ".join(_qid(n) for n in common)
+        con.execute("INSERT INTO %s (%s) SELECT %s FROM %s" % (_qid(tname), cl, cl, _qid(tmp)))
+        con.execute("DROP TABLE %s" % _qid(tmp))
+        for _name, sql in old_idx:
+            try:
+                con.execute(sql)
+            except sqlite3.OperationalError:
+                pass
+        for sql in ref_idx_sql:
+            try:
+                con.execute(sql)
+            except sqlite3.OperationalError:
+                pass
+        con.commit()
+        _heal_record(con, report, "rebuild_table", tname, None,
+                     "أُعيد بناء الجدول بالتعريف الحديث وانتقلت بياناته كاملة (%d عموداً)" % len(common))
+        return True
+    except Exception as e:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        _heal_warn(report, "فشلت إعادة بناء %s وتم التراجع بدون أي تغيير: %s" % (tname, e))
+        return False
+    finally:
+        con.execute("PRAGMA legacy_alter_table=OFF")
+
+
+def _flush_features(con):
+    items = list(REGISTERED_FEATURES) + list(_pending_features)
+    for fname, tname, cname in items:
+        exists = con.execute(
+            "SELECT 1 FROM feature_registry WHERE feature_name=? AND IFNULL(table_name,'')=IFNULL(?,'') "
+            "AND IFNULL(column_name,'')=IFNULL(?,'')", (fname, tname, cname)).fetchone()
+        if not exists:
+            con.execute("INSERT INTO feature_registry(feature_name, table_name, column_name, status) "
+                        "VALUES(?,?,?,'active')", (fname, tname, cname))
+            log.info("[FEATURE] سُجلت ميزة جديدة: %s (%s.%s)", fname, tname, cname)
+
+
+def self_heal_schema(force_rebuild=False):
+    """الإصلاح الذاتي: يقارن SCHEMA بالداتابيز الفعلية ويضيف الجداول والأعمدة الناقصة
+    ويعيد بناء ما اختلف نوعه أو افتراضيه. آمن للتكرار، ولا يحذف أي بيانات.
+    force_rebuild=True يعيد بناء كل جداول SCHEMA مع الاحتفاظ بالبيانات (زر إعادة البناء)."""
+    global _schema_sig_seen, _last_heal_report
+    report = {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "ok": True,
+              "actions": [], "warnings": []}
+    with _SCHEMA_LOCK:
+        con = None
+        try:
+            os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+            tables, ref_indexes = _reference_schema()
+            con = sqlite3.connect(DB_PATH, timeout=30)
+            con.execute("PRAGMA foreign_keys=OFF")
+            con.executescript(META_SCHEMA)           # db_changelog و feature_registry
+            con.commit()
+
+            existing = {r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+            # 1) الجداول الناقصة
+            for tname, ref in tables.items():
+                if tname not in existing:
+                    con.execute(ref["sql"].replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+                    _heal_record(con, report, "create_table", tname, None, "جدول ناقص — تم إنشاؤه")
+                    existing.add(tname)
+            con.commit()
+
+            # 2) الأعمدة الناقصة من المرجع + الأعمدة الإضافية المعروفة
+            for tname, ref in tables.items():
+                have = {c["name"] for c in _table_cols(con, tname)}
+                for rc in ref["cols"]:
+                    if rc["name"] in have or rc["pk"]:
+                        continue
+                    decl, warn = _column_decl(rc)
+                    con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (_qid(tname), _qid(rc["name"]), decl))
+                    _heal_record(con, report, "add_column", tname, rc["name"], "عمود ناقص — أُضيف (%s)" % decl)
+                    if warn:
+                        _heal_warn(report, "%s.%s: %s" % (tname, rc["name"], warn))
+            for tname, cname, decl in EXTRA_COLUMNS:
+                if tname not in existing:
+                    continue
+                if cname not in {c["name"] for c in _table_cols(con, tname)}:
+                    con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (_qid(tname), _qid(cname), decl))
+                    _heal_record(con, report, "add_column", tname, cname, "عمود ناقص — أُضيف (%s)" % decl)
+            con.commit()
+
+            # 3) الاختلافات في النوع / الافتراضي / NOT NULL → إعادة بناء آمنة
+            plan = []
+            for tname, ref in tables.items():
+                if force_rebuild:
+                    plan.append((tname, "إعادة بناء يدوية"))
+                    continue
+                have = {c["name"]: c for c in _table_cols(con, tname)}
+                for rc in ref["cols"]:
+                    hc = have.get(rc["name"])
+                    if hc is None:
+                        if rc["pk"]:
+                            plan.append((tname, "المفتاح الأساسي %s مفقود" % rc["name"]))
+                            break
+                        continue
+                    reason = _col_drift(rc, hc)
+                    if reason:
+                        plan.append((tname, "%s: %s" % (rc["name"], reason)))
+                        break
+
+            if plan:
+                backup = _backup_db_file("heal")
+                _heal_record(con, report, "backup", "*", None, "نسخة احتياطية قبل إعادة البناء: " + os.path.basename(backup))
+                seen = set()
+                for tname, reason in plan:
+                    if tname in seen:
+                        continue
+                    seen.add(tname)
+                    _heal_record(con, report, "drift", tname, None, reason)
+                    _rebuild_table(con, tname, tables[tname], ref_indexes, report)
+
+            # 4) الأعمدة الإضافية المعروفة (بعد إعادة البناء) + الميزات
+            _flush_features(con)
+            con.commit()
+            if not report["actions"]:
+                log.info("[SELF-HEAL] قاعدة البيانات محدثة ولا تحتاج أي إصلاح.")
+        except Exception as e:
+            report["ok"] = False
+            _heal_warn(report, "خطأ فادح في الإصلاح الذاتي: %s" % e)
+            log.exception("[SELF-HEAL] fatal")
+            try:
+                if con:
+                    con.rollback()
+            except Exception:
+                pass
+        finally:
+            if con:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+            _schema_sig_seen = _db_file_signature()
+            _last_heal_report = report
+    return report
+
+
+@app.before_request
+def _self_heal_before_request():
+    """يتحقق قبل كل طلب: لو تغير ملف الداتابيز (استعادة نسخة مثلاً) يُعاد الإصلاح الذاتي."""
+    global _schema_sig_seen
+    sig = _db_file_signature()
+    if sig is None or sig == _schema_sig_seen:
+        return None
+    try:
+        self_heal_schema()
+    except Exception:
+        log.exception("[SELF-HEAL] before_request")
+    return None
+
+
+# ----------------- النسخ اللقطية (Snapshot) -----------------
+def create_snapshot_zip():
+    """ZIP يحتوي: قاعدة البيانات كاملة + web.py + مجلد static + ملف MANIFEST."""
+    import zipfile
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tmp_db = os.path.join(BACKUP_DIR, "_snap_tmp_%s.db" % ts)
+    src = sqlite3.connect(DB_PATH, timeout=30)
+    dst = sqlite3.connect(tmp_db)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    path = os.path.join(BACKUP_DIR, "snapshot_%s.zip" % ts)
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(tmp_db, "matari.db")
+            wp = os.path.join(BASE_DIR, "web.py")
+            if os.path.exists(wp):
+                zf.write(wp, "web.py")
+            static_dir = os.path.join(BASE_DIR, "static")
+            if os.path.isdir(static_dir):
+                for root, _dirs, files in os.walk(static_dir):
+                    for f in files:
+                        full = os.path.join(root, f)
+                        zf.write(full, os.path.relpath(full, BASE_DIR))
+            zf.writestr("MANIFEST.txt", "created_at=%s\nsource_db=%s\n" % (ts, DB_PATH))
+    finally:
+        try:
+            os.remove(tmp_db)
+        except OSError:
+            pass
+    _prune_files(BACKUP_DIR, "snapshot_", ".zip", keep=20)
+    log.info("[SNAPSHOT] أُنشئت نسخة الأمان: %s", path)
+    return path
+
+
+def _backup_bot_creds():
+    """يقرأ توكن وآيدي النسخ الاحتياطي (يُستدعى داخل طلب، لأن get_setting يحتاج سياق Flask)."""
+    token = os.environ.get("BACKUP_BOT_TOKEN") or get_setting("BACKUP_BOT_TOKEN", "") or DEFAULT_SETTINGS.get("BACKUP_BOT_TOKEN", "")
+    chat_id = os.environ.get("BACKUP_CHAT_ID") or get_setting("BACKUP_CHAT_ID", "") or DEFAULT_SETTINGS.get("BACKUP_CHAT_ID", "")
+    return token, chat_id
+
+
+def send_snapshot_to_telegram(path, token, chat_id):
+    """يرسل ملف النسخة إلى تيليجرام عبر BACKUP_BOT_TOKEN و BACKUP_CHAT_ID."""
+    try:
+        import requests
+        if not token or not chat_id or "ضع_" in token:
+            return False, "BACKUP_BOT_TOKEN أو BACKUP_CHAT_ID غير مهيأ"
+        if os.path.getsize(path) > 49 * 1024 * 1024:
+            return False, "حجم الملف أكبر من حد تيليجرام (50MB)"
+        with open(path, "rb") as f:
+            r = requests.post(
+                "https://api.telegram.org/bot%s/sendDocument" % token,
+                data={"chat_id": chat_id, "caption": "🛡 نسخة أمان MATARI — " + os.path.basename(path)},
+                files={"document": f}, timeout=180)
+        ok = r.ok and bool(r.json().get("ok"))
+        log.info("[SNAPSHOT] إرسال تيليجرام: %s", "نجح" if ok else "فشل")
+        return ok, ("تم الإرسال إلى تيليجرام" if ok else "رفض تيليجرام الإرسال")
+    except Exception as e:
+        log.warning("[SNAPSHOT] فشل الإرسال: %s", e)
+        return False, str(e)
+
+
+# ----------------- معلومات الداتابيز للعرض -----------------
+def _db_table_overview():
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        names = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        out = []
+        for n in names:
+            try:
+                cols = _table_cols(con, n)
+                cnt = con.execute("SELECT COUNT(*) FROM %s" % _qid(n)).fetchone()[0]
+            except sqlite3.Error:
+                cols, cnt = [], "?"
+            out.append({"name": n, "rows": cnt, "cols": cols})
+        return out
+    finally:
+        con.close()
+
+
+def _db_changelog_rows(limit=50):
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        rows = con.execute("SELECT created_at, action, table_name, column_name, details, source "
+                           "FROM db_changelog ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return rows
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+
+def _set_db_action(ok, title, lines):
+    global _db_last_action
+    _db_last_action = {"title": title, "ok": ok, "lines": [str(x) for x in lines][:80]}
+
+
+def _db_add_column_safe(table, col, ctype, default):
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            raise ValueError("الجدول غير موجود")
+        if col in {c["name"] for c in _table_cols(con, table)}:
+            raise ValueError("العمود موجود بالفعل")
+        decl = ctype
+        lit = _sql_literal(default)
+        if lit is not None:
+            decl += " DEFAULT " + lit
+        con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (_qid(table), _qid(col), decl))
+        _changelog(con, "add_column", table, col, "يدوياً من لوحة الإدارة: " + decl, source="admin")
+        con.commit()
+        return decl
+    finally:
+        con.close()
+
+
+def _db_add_table_safe(name, specs):
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        if con.execute("SELECT 1 FROM sqlite_master WHERE name=?", (name,)).fetchone():
+            raise ValueError("الاسم مستخدم بالفعل")
+        parts = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
+        for cname, ctype, dflt in specs:
+            parts.append("%s %s%s" % (_qid(cname), ctype, (" DEFAULT " + dflt) if dflt else ""))
+        parts.append("created_at TEXT DEFAULT (datetime('now'))")
+        con.execute("CREATE TABLE %s (%s)" % (_qid(name), ", ".join(parts)))
+        _changelog(con, "create_table", name, None, "يدوياً: " + ", ".join(s[0] for s in specs), source="admin")
+        con.commit()
+    finally:
+        con.close()
+
+
+_db_table_re = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]{0,63})\s+(TEXT|INTEGER|REAL|NUMERIC|BLOB)"
+    r"(?:\s+DEFAULT\s+(-?\d+(?:\.\d+)?|'[^']*'))?$", re.IGNORECASE)
+
+
+def _db_manager_css():
+    return """<style>
+.dbm-wrap{max-width:1100px;margin:0 auto;padding:0 12px 40px}
+.dbm-hero{background:linear-gradient(135deg,rgba(99,102,241,.28),rgba(16,185,129,.18));border:1px solid var(--border);border-radius:20px;padding:22px;margin-bottom:18px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 8px 30px rgba(0,0,0,.25)}
+.dbm-title{font-size:22px;font-weight:900;margin:0 0 6px}
+.dbm-sub{color:var(--muted);font-size:13px;line-height:1.7}
+.dbm-section{background:linear-gradient(145deg,var(--card),var(--card2));border:1px solid var(--border);border-radius:18px;padding:18px;margin-bottom:18px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.dbm-h{font-size:16px;font-weight:900;margin:0 0 12px;color:var(--text)}
+.dbm-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.dbm-stat{background:linear-gradient(145deg,var(--card),var(--card2));border:1px solid var(--border);border-radius:16px;padding:14px}
+.dbm-stat b{display:block;font-size:24px;font-weight:900;background:linear-gradient(90deg,#818cf8,#10b981);-webkit-background-clip:text;background-clip:text;color:transparent}
+.dbm-stat span{font-size:12px;color:var(--muted)}
+.dbm-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:18px}
+.dbm-actions form,.dbm-actions a{margin:0}
+.dbm-btn{width:100%;padding:12px;border-radius:12px;border:1px solid var(--border);background:linear-gradient(135deg,rgba(99,102,241,.25),rgba(99,102,241,.08));color:var(--text);font-weight:800;cursor:pointer;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px;font-size:14px}
+.dbm-btn.green{background:linear-gradient(135deg,rgba(16,185,129,.3),rgba(16,185,129,.08))}
+.dbm-btn.red{background:linear-gradient(135deg,rgba(239,68,68,.3),rgba(239,68,68,.08))}
+.dbm-btn.amber{background:linear-gradient(135deg,rgba(245,158,11,.3),rgba(245,158,11,.08))}
+.dbm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.dbm-card{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:16px;padding:14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.dbm-card h4{margin:0 0 6px;font-size:15px;font-weight:900;color:#a5b4fc;direction:ltr;text-align:left;word-break:break-all}
+.dbm-meta{font-size:12px;color:var(--muted);margin-bottom:8px}
+.dbm-cols{width:100%;border-collapse:collapse;font-size:12px}
+.dbm-cols td,.dbm-cols th{padding:5px 4px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top;word-break:break-all}
+.dbm-cols th{color:var(--muted);font-weight:700}
+.dbm-tag{display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(16,185,129,.15);color:#10b981;font-size:10px;font-weight:800}
+.dbm-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end}
+.dbm-form label{font-size:12px;color:var(--muted);font-weight:700;display:block;margin-bottom:4px}
+.dbm-form input,.dbm-form select,.dbm-form textarea{width:100%;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:14px;box-sizing:border-box;font-family:inherit}
+.dbm-form textarea{min-height:90px;direction:ltr;font-family:monospace}
+.dbm-log{max-height:420px;overflow:auto}
+.dbm-log-row{padding:9px 10px;border-radius:10px;background:var(--bg2);margin-bottom:6px;border-right:3px solid #6366f1;font-size:12px;line-height:1.6;word-break:break-word}
+.dbm-note{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.7}
+.dbm-result{border-radius:16px;padding:14px;margin-bottom:18px;border:1px solid var(--border)}
+.dbm-result.ok{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.35)}
+.dbm-result.bad{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.35)}
+.dbm-result ul{margin:8px 0 0;padding-right:18px;font-size:13px;line-height:1.8}
+@media (max-width:600px){.dbm-title{font-size:18px}.dbm-section{padding:14px}.dbm-form{grid-template-columns:1fr}}
+</style>"""
+
+
+def _render_db_manager(tables, changelog, action, heal):
+    total_rows = 0
+    for t in tables:
+        if isinstance(t["rows"], int):
+            total_rows += t["rows"]
+    last_heal = heal.get("at") or "لم يُنفذ بعد"
+    h = []
+    h.append('<div class="dbm-wrap">')
+    h.append('<div class="dbm-hero"><div class="dbm-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:8px;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> إدارة قاعدة البيانات</div>'
+             '<div class="dbm-sub">فحص وإصلاح وإضافة جداول وأعمدة ونسخ احتياطية، بدون حذف أي بيانات. '
+             'كل تغيير يُسجَّل في سجل التغييرات.</div></div>')
+
+    if action.get("title"):
+        cls = "ok" if action.get("ok") else "bad"
+        items = "".join("<li>%s</li>" % esc(x) for x in action.get("lines", []))
+        h.append('<div class="dbm-result %s"><b>%s %s</b><ul>%s</ul></div>' % (
+            cls, "نجح" if action.get("ok") else "تحذير", esc(action["title"]), items))
+
+    h.append('<div class="dbm-stats">')
+    h.append('<div class="dbm-stat"><b>%d</b><span>عدد الجداول</span></div>' % len(tables))
+    h.append('<div class="dbm-stat"><b>%s</b><span>إجمالي الصفوف</span></div>' % total_rows)
+    h.append('<div class="dbm-stat"><b>%d</b><span>سجل التغييرات</span></div>' % len(changelog))
+    h.append('<div class="dbm-stat"><b style="font-size:13px">%s</b><span>آخر إصلاح تلقائي</span></div>' % esc(last_heal))
+    h.append('</div>')
+
+    h.append('<div class="dbm-section"><div class="dbm-h"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:8px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> الإجراءات</div><div class="dbm-actions">')
+    h.append('<form method="POST" action="/admin/database/heal"><button class="dbm-btn green" type="submit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> إصلاح تلقائي</button></form>')
+    h.append('<form method="POST" action="/admin/database/rebuild" onsubmit="return confirm(\'سيُعاد بناء كل الجداول مع الاحتفاظ بالبيانات، وتُؤخذ نسخة احتياطية أولاً. متابعة؟\')"><button class="dbm-btn amber" type="submit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> إعادة بناء الجداول</button></form>')
+    h.append('<form method="POST" action="/admin/database/integrity"><button class="dbm-btn" type="submit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> فحص سلامة الداتابيز</button></form>')
+    h.append('<form method="POST" action="/admin/database/backup"><button class="dbm-btn" type="submit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> نسخة احتياطية الآن</button></form>')
+    h.append('<form method="POST" action="/admin/database/snapshot"><button class="dbm-btn green" type="submit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> حفظ نسخة أمان (+ تيليجرام)</button></form>')
+    h.append('<a class="dbm-btn red" href="/admin/backup/restore"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> استعادة نسخة</a>')
+    h.append('<a class="dbm-btn" href="/admin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg> رجوع للوحة</a>')
+    h.append('</div><div class="dbm-note">زر الاستعادة يفتح صفحة الاستعادة الموجودة. بعد أي استعادة يعمل الإصلاح الذاتي تلقائياً عند أول طلب.</div></div>')
+
+    h.append('<div class="dbm-section"><div class="dbm-h"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:6px;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg> الجداول والأعمدة</div><div class="dbm-grid">')
+    for t in tables:
+        rows_html = ""
+        for c in t["cols"]:
+            tags = ' <span class="dbm-tag">PK</span>' if c["pk"] else ""
+            dflt = "" if c["dflt"] is None else str(c["dflt"])
+            rows_html += "<tr><td>%s%s</td><td>%s</td><td>%s</td></tr>" % (
+                esc(c["name"]), tags, esc(c["type"] or "-"), esc(dflt) or "—")
+        h.append('<div class="dbm-card"><h4>%s</h4><div class="dbm-meta"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:4px;"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> %s صف · %d عمود</div>'
+                 '<table class="dbm-cols"><tr><th>العمود</th><th>النوع</th><th>افتراضي</th></tr>%s</table></div>'
+                 % (esc(t["name"]), esc(t["rows"]), len(t["cols"]), rows_html))
+    h.append('</div></div>')
+
+    h.append('<div class="dbm-section"><div class="dbm-h"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:8px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> إضافة عمود جديد</div>'
+             '<form method="POST" action="/admin/database/add_column" class="dbm-form">'
+             '<div><label>الجدول</label><select name="table" required>')
+    for t in tables:
+        h.append('<option value="%s">%s</option>' % (esc(t["name"]), esc(t["name"])))
+    h.append('</select></div>'
+             '<div><label>اسم العمود</label><input name="column" required placeholder="new_column"></div>'
+             '<div><label>النوع</label><select name="ctype">'
+             '<option>TEXT</option><option>INTEGER</option><option>REAL</option><option>NUMERIC</option><option>BLOB</option>'
+             '</select></div>'
+             '<div><label>القيمة الافتراضية (اختياري)</label><input name="default" placeholder="مثال: 0 أو active"></div>'
+             '<div><button class="dbm-btn green" type="submit">إضافة العمود</button></div>'
+             '</form></div>')
+
+    h.append('<div class="dbm-section"><div class="dbm-h"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:8px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg> إضافة جدول جديد</div>'
+             '<form method="POST" action="/admin/database/add_table" class="dbm-form" style="grid-template-columns:1fr">'
+             '<div><label>اسم الجدول</label><input name="name" required placeholder="my_table"></div>'
+             '<div><label>الأعمدة (سطر لكل عمود)، الصيغة: اسم النوع [DEFAULT قيمة]</label>'
+             '<textarea name="columns" placeholder="title TEXT DEFAULT &#39;&#39;&#10;amount REAL DEFAULT 0"></textarea></div>'
+             '<div><button class="dbm-btn green" type="submit">إنشاء الجدول</button></div>'
+             '<div class="dbm-note">يُضاف تلقائياً عمود id (مفتاح أساسي) وعمود created_at. الجدول لا يُحذف من هنا.</div>'
+             '</form></div>')
+
+    h.append('<div class="dbm-section"><div class="dbm-h"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-left:8px;"><path d="M4 2v20l4-4 4 4 4-4 4 4V2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/></svg> سجل التغييرات (آخر 50)</div><div class="dbm-log">')
+    if not changelog:
+        h.append('<div class="dbm-note">لا توجد تغييرات مسجلة بعد.</div>')
+    for row in changelog:
+        created, act, tname, cname, details, source = row
+        target = (tname or "") + (("." + cname) if cname else "")
+        h.append('<div class="dbm-log-row"><b>%s</b> · %s · <span style="color:var(--muted)">%s</span><br>%s<br>'
+                 '<span style="color:var(--muted)">%s · %s</span></div>' % (
+                     esc(act), esc(target or "—"), esc(source or ""), esc(details or ""),
+                     esc(created or ""), esc(source or "")))
+    h.append('</div></div>')
+    h.append('</div>')
+    return _db_manager_css() + "".join(h)
+
+
+# ----------------- المسارات -----------------
+@app.route("/admin/database")
+@admin_required
+@register_feature("إدارة قاعدة البيانات", "db_changelog")
+def admin_database():
+    try:
+        tables = _db_table_overview()
+    except Exception as e:
+        log.exception("admin_database overview")
+        tables = []
+        _set_db_action(False, "تعذر قراءة الداتابيز", [str(e)])
+    body = _render_db_manager(tables, _db_changelog_rows(50), _db_last_action, _last_heal_report)
+    return page("admin_database", body=body)
+
+
+@app.route("/admin/database/heal", methods=["POST"])
+@admin_required
+def admin_database_heal():
+    rep = self_heal_schema()
+    lines = list(rep["actions"]) + ["⚠️ " + w for w in rep["warnings"]]
+    if not lines:
+        lines = ["قاعدة البيانات سليمة ومحدثة ولا تحتاج أي إصلاح."]
+    _set_db_action(rep["ok"] and not rep["warnings"], "نتيجة الإصلاح التلقائي", lines)
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/rebuild", methods=["POST"])
+@admin_required
+def admin_database_rebuild():
+    rep = self_heal_schema(force_rebuild=True)
+    lines = list(rep["actions"]) + ["⚠️ " + w for w in rep["warnings"]]
+    _set_db_action(rep["ok"] and not rep["warnings"], "نتيجة إعادة بناء الجداول", lines or ["لا شيء للتنفيذ"])
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/integrity", methods=["POST"])
+@admin_required
+def admin_database_integrity():
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        res = [r[0] for r in con.execute("PRAGMA integrity_check").fetchall()]
+        fk = con.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        con.close()
+    ok = res == ["ok"]
+    lines = ["integrity_check: " + ("ok " if ok else "; ".join(res[:20]))]
+    lines.append("foreign_key_check: " + ("لا توجد مشاكل " if not fk else "%d مشكلة" % len(fk)))
+    _set_db_action(ok and not fk, "نتيجة فحص السلامة", lines)
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/backup", methods=["POST"])
+@admin_required
+def admin_database_backup():
+    ok, res = make_safe_backup()
+    _set_db_action(ok, "نسخة احتياطية", [("تم إنشاء: " + os.path.basename(res)) if ok else ("فشل: " + str(res))])
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/snapshot", methods=["POST"])
+@admin_required
+def admin_database_snapshot():
+    try:
+        path = create_snapshot_zip()
+    except Exception as e:
+        log.exception("snapshot")
+        _set_db_action(False, "نسخة الأمان", ["فشل إنشاء النسخة: %s" % e])
+        return redirect(url_for("admin_database"))
+    token, chat_id = _backup_bot_creds()
+    threading.Thread(target=send_snapshot_to_telegram, args=(path, token, chat_id), daemon=True).start()
+    _set_db_action(True, "نسخة الأمان", [
+        "تم حفظ النسخة محلياً: backups/auto/" + os.path.basename(path),
+        "جاري الإرسال إلى تيليجرام في الخلفية (تحقق من السجل إن لم تصل)."])
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/add_column", methods=["POST"])
+@admin_required
+def admin_database_add_column():
+    table = request.form.get("table", "").strip()
+    col = request.form.get("column", "").strip()
+    ctype = request.form.get("ctype", "TEXT").strip().upper()
+    default = request.form.get("default", "")
+    err = _validate_ident(table) or _validate_ident(col)
+    if not err and ctype not in _SQL_TYPES:
+        err = "نوع غير مدعوم"
+    if err:
+        _set_db_action(False, "إضافة عمود", [err])
+        return redirect(url_for("admin_database"))
+    try:
+        decl = _db_add_column_safe(table, col, ctype, default)
+        _set_db_action(True, "إضافة عمود", ["أُضيف %s.%s (%s) " % (table, col, decl)])
+    except Exception as e:
+        _set_db_action(False, "إضافة عمود", [str(e)])
+    return redirect(url_for("admin_database"))
+
+
+@app.route("/admin/database/add_table", methods=["POST"])
+@admin_required
+def admin_database_add_table():
+    name = request.form.get("name", "").strip()
+    spec = request.form.get("columns", "")
+    err = _validate_ident(name)
+    specs, seen = [], set(["id", "created_at"])
+    if not err:
+        for raw in spec.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            m = _db_table_re.match(line)
+            if not m:
+                err = "سطر غير صالح: " + line
+                break
+            cname, ctype, dflt = m.group(1), m.group(2).upper(), m.group(3)
+            e2 = _validate_ident(cname)
+            if e2 or cname.lower() in seen:
+                err = e2 or ("عمود مكرر: " + cname)
+                break
+            seen.add(cname.lower())
+            specs.append((cname, ctype, dflt))
+        if not err and not specs:
+            err = "أضف عموداً واحداً على الأقل"
+    if err:
+        _set_db_action(False, "إنشاء جدول", [err])
+        return redirect(url_for("admin_database"))
+    try:
+        _db_add_table_safe(name, specs)
+        _set_db_action(True, "إنشاء جدول", ["أُنشئ الجدول %s بـ %d عمود " % (name, len(specs))])
+    except Exception as e:
+        _set_db_action(False, "إنشاء جدول", [str(e)])
+    return redirect(url_for("admin_database"))
+
+
+# ============================================================
+
 def bootstrap_database():
     """تهيئة آمنة وقابلة للتكرار: تنشئ المجلدات والجداول والأعمدة الناقصة."""
     for d in ("static/icons", "static/avatars"):
@@ -10393,6 +11217,12 @@ def bootstrap_database():
         ensure_schema()
     except Exception:
         log.exception("فشل ensure_schema")
+
+    # الإصلاح الذاتي الشامل (يضيف الجداول/الأعمدة الناقصة ويعيد بناء ما اختلف)
+    try:
+        self_heal_schema()
+    except Exception:
+        log.exception("فشل self_heal_schema")
 
     for name, fn in (("auto_fix_db", auto_fix_db),
                      ("seed_buy_prices", seed_buy_prices),
