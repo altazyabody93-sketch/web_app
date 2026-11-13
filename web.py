@@ -131,8 +131,20 @@ def _handle_unexpected_error(e):
             os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
             fixed = True
         elif kind == "corrupt":
-            _backup_db_file("corrupt")
-            note = "نسخة احتياطية أُخذت"
+            healthy = False
+            try:
+                _qc = sqlite3.connect(DB_PATH, timeout=10)
+                healthy = _qc.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                _qc.close()
+            except Exception as ce:
+                note = "تعذر فحص الداتابيز: %s" % str(ce)[:150]
+            if healthy:
+                kind = "locked"  # الداتابيز سليمة، الخطأ عابر وما نقول تالفة
+                action = "الداتابيز سليمة (quick_check ok)، خطأ عابر"
+                fixed = True
+            else:
+                _backup_db_file("corrupt")
+                note = note or "فشل الفحص، نسخة احتياطية أُخذت"
     except Exception as fix_err:
         log.warning("[SMART] فشل الإصلاح: %s", fix_err)
         note = "فشل الإصلاح: %s" % str(fix_err)[:200]
@@ -148,9 +160,18 @@ def _handle_unexpected_error(e):
 
     retry = request.full_path or "/"
     title = "تم الإصلاح" if fixed else "حدث خطأ"
+    detail = ""
+    try:
+        _adm = db().execute("SELECT is_admin FROM users WHERE user_id=?", (session.get("user_id"),)).fetchone()
+        if _adm and _adm["is_admin"]:
+            detail = ("<pre dir='ltr' style='text-align:left;white-space:pre-wrap;background:#15152a;padding:12px;"
+                      "border-radius:10px;font-size:12px;color:#fca5a5'>" + esc(kind) + ": " +
+                      esc(type(e).__name__ + " - " + str(e)[:400]) + "</pre>")
+    except Exception:
+        pass
     html_out = ("<div dir='rtl' style='font-family:Cairo,sans-serif;padding:40px 16px;text-align:center;"
                 "color:#e8e8f5;background:#0b0b1a;min-height:70vh'>"
-                "<h2>" + title + "</h2><p>" + esc(_ERR_MESSAGES.get(kind, _ERR_MESSAGES["other"])) + "</p>"
+                "<h2>" + title + "</h2><p>" + esc(_ERR_MESSAGES.get(kind, _ERR_MESSAGES["other"])) + "</p>" + detail +
                 "<p><a href='" + esc(retry) + "' style='color:#818cf8;font-weight:800'>حاول مرة أخرى</a>"
                 " &nbsp; <a href='/' style='color:#818cf8'>الرجوع للرئيسية</a></p></div>")
     return html_out, 500
