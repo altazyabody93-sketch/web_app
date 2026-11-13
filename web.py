@@ -66,15 +66,95 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = 2592000  # 30 days
 
+
+# ============================================================
+# الإصلاح الذكي للأخطاء: يصنف الخطأ، يصلحه إذا يقدر، يعيد الطلب تلقائياً إذا أمكن،
+# ويسجل كل شي في سجل الأخطاء (/admin/errors) حتى تشوف وش صار.
+# ============================================================
+_ERR_RETRY_FLAG = "_smart_retry"
+_ERR_MESSAGES = {
+    "schema": "كانت قاعدة البيانات تحتاج تحديث، وتم تحديثها تلقائياً.",
+    "locked": "قاعدة البيانات مشغولة لحظياً. حاول بعد ثوانٍ.",
+    "corrupt": "صار خلل في قاعدة البيانات، وأخذنا نسخة احتياطية. الأدمن راح يراجع.",
+    "path": "مجلد قاعدة البيانات كان مفقود، وتم إنشاؤه.",
+    "other": "حدث خطأ مؤقت. حاول مرة أخرى بعد قليل.",
+}
+
+
+def _classify_db_error(e):
+    msg = str(e).lower()
+    if any(x in msg for x in ("no such table", "no such column", "has no column named", "no such index")):
+        return "schema", "إصلاح المخطط وإعادة الطلب"
+    if "database is locked" in msg or "database table is locked" in msg:
+        return "locked", "الداتابيز مشغولة، إعادة المحاولة لاحقاً"
+    if any(x in msg for x in ("malformed", "file is not a database", "disk i/o error", "database disk image")):
+        return "corrupt", "نسخة احتياطية تلقائية + مراجعة"
+    if "unable to open database" in msg:
+        return "path", "إنشاء مجلد الداتابيز"
+    return "other", "تسجيل للمراجعة"
+
+
+def _log_error_row(e, kind, action, note, fixed):
+    for attempt in (1, 2):
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=10)
+            con.execute("INSERT INTO error_log(method, path, endpoint, error_type, message, action, fixed) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (request.method, request.path[:300], (request.endpoint or "")[:120], kind,
+                         str(e)[:500], (action + (" | " + note if note else ""))[:500], 1 if fixed else 0))
+            con.commit()
+            con.close()
+            return
+        except sqlite3.Error:
+            if attempt == 1:
+                try:
+                    self_heal_schema()
+                except Exception:
+                    pass
+    log.warning("[SMART] تعذر تسجيل الخطأ في error_log")
+
+
 @app.errorhandler(Exception)
 def _handle_unexpected_error(e):
-    """أي خطأ غير متوقع يتسجل في الـ Logs ويرجع صفحة بديلة بدل 502/انهيار."""
+    from flask import make_response
     if isinstance(e, HTTPException):
         return e  # 404 و 403 ... تبقى كما هي
-    log.exception("Unhandled error: %s", e)
-    return ("<div dir='rtl' style='font-family:sans-serif;padding:40px;text-align:center'>"
-            "<h2>حدث خطأ مؤقت</h2><p>حاول مرة أخرى بعد قليل.</p>"
-            "<a href='/'>الرجوع للرئيسية</a></div>"), 500
+    kind, action = _classify_db_error(e)
+    log.exception("[SMART] خطأ من نوع %s: %s", kind, e)
+    fixed, note = False, ""
+    try:
+        if kind == "schema":
+            rep = self_heal_schema()
+            fixed = True
+            note = "خطوات الإصلاح: %d" % len(rep["actions"])
+        elif kind == "path":
+            os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+            fixed = True
+        elif kind == "corrupt":
+            _backup_db_file("corrupt")
+            note = "نسخة احتياطية أُخذت"
+    except Exception as fix_err:
+        log.warning("[SMART] فشل الإصلاح: %s", fix_err)
+        note = "فشل الإصلاح: %s" % str(fix_err)[:200]
+    _log_error_row(e, kind, action, note, fixed)
+
+    # إعادة الطلب تلقائياً: للطلبات GET فقط، ومرة وحدة بس (ما نسوي حلقة)
+    if (fixed and request.method == "GET" and request.endpoint in app.view_functions
+            and not request.args.get(_ERR_RETRY_FLAG)):
+        try:
+            return make_response(app.view_functions[request.endpoint](**(request.view_args or {})))
+        except Exception as retry_err:
+            log.warning("[SMART] فشلت إعادة الطلب: %s", retry_err)
+
+    retry = request.full_path or "/"
+    title = "تم الإصلاح" if fixed else "حدث خطأ"
+    html_out = ("<div dir='rtl' style='font-family:Cairo,sans-serif;padding:40px 16px;text-align:center;"
+                "color:#e8e8f5;background:#0b0b1a;min-height:70vh'>"
+                "<h2>" + title + "</h2><p>" + esc(_ERR_MESSAGES.get(kind, _ERR_MESSAGES["other"])) + "</p>"
+                "<p><a href='" + esc(retry) + "' style='color:#818cf8;font-weight:800'>حاول مرة أخرى</a>"
+                " &nbsp; <a href='/' style='color:#818cf8'>الرجوع للرئيسية</a></p></div>")
+    return html_out, 500
+
 
 def db():
     if "db" not in g:
@@ -311,6 +391,30 @@ CREATE INDEX IF NOT EXISTS idx_nums_platform ON numbers(platform);
 CREATE INDEX IF NOT EXISTS idx_nums_buyer ON numbers(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_dep_user ON deposits(user_id);
 CREATE INDEX IF NOT EXISTS idx_dep_status ON deposits(status);
+CREATE TABLE IF NOT EXISTS error_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  method TEXT,
+  path TEXT,
+  endpoint TEXT,
+  error_type TEXT,
+  message TEXT,
+  action TEXT,
+  fixed INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS stamps(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  color TEXT DEFAULT '#f59e0b',
+  shape TEXT DEFAULT 'seal',
+  svg TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS number_stamps(
+  number_id INTEGER NOT NULL,
+  stamp_id INTEGER NOT NULL,
+  PRIMARY KEY(number_id, stamp_id)
+);
 CREATE TABLE IF NOT EXISTS static_pages_overrides(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   route TEXT UNIQUE NOT NULL,
@@ -2117,7 +2221,7 @@ def _nav(u):
         '<div id="fpsMeter" style="display: inline-flex; align-items: center; gap: 3px; font-family: monospace; font-size: 9px; font-weight: 900; padding: 2px 6px; border-radius: 6px; background: rgba(16,185,129,0.1); color: #10b981; border: 1px solid rgba(16,185,129,0.3); margin-right: 6px; user-select: none;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> <span id="fpsValue">60</span></div>'
         '</a>'
         '<div style="display:flex;align-items:center;gap:8px">'
-        + _pb_navbar_html(u) + admin_btn +
+        + admin_btn +
         '<button onclick="toggleTheme()" id="themeToggle" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:var(--primary2);cursor:pointer;padding:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.3s;width:40px;height:40px">'
         '<svg id="themeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
         '</button>'
@@ -2362,9 +2466,6 @@ def daily_bonus():
 @app.route("/vip")
 @login_required
 def vip_page():
-    _ovr = _static_override("/vip")
-    if _ovr is not None:
-        return _ovr
     u = current_user()
     try: spent = u["total_spent"] or 0
     except: spent = 0
@@ -2408,9 +2509,6 @@ def vip_page():
 @app.route("/transfer", methods=["GET", "POST"])
 @login_required
 def transfer():
-    _ovr = _static_override("/transfer")
-    if _ovr is not None:
-        return _ovr
     u = current_user()
     if request.method == "POST":
         try:
@@ -2690,9 +2788,6 @@ def index():
 
 @app.route("/about")
 def about_page():
-    _ovr = _static_override("/about")
-    if _ovr is not None:
-        return _ovr
     items = [
         ("home", "الرئيسية", "الصفحة الرئيسية التي تعرض أحدث الأرقام المتاحة وأهم الميزات.", "#6366f1"),
         ("store", "المتجر", "تصفح جميع الأرقام المتاحة للبيع مقسمة حسب المنصة (واتساب/تيليجرام) والدولة.", "#818cf8"),
@@ -2902,10 +2997,6 @@ def my_numbers_list():
 @app.route("/deposit/<method>", methods=["GET", "POST"])
 @login_required
 def deposit(method=None):
-    if method is None:
-        _ovr = _static_override("/deposit")
-        if _ovr is not None:
-            return _ovr
     u = current_user()
     if request.method == "POST":
         method_form = request.form.get("method", "").strip()
@@ -2938,9 +3029,6 @@ def deposit(method=None):
 @app.route("/referral")
 @login_required
 def referral():
-    _ovr = _static_override("/referral")
-    if _ovr is not None:
-        return _ovr
     u = current_user()
     cnt = db().execute("SELECT COUNT(*) c FROM users WHERE referred_by=?", (u["user_id"],)).fetchone()["c"]
     return page("referral", referral_count=cnt)
@@ -3085,9 +3173,6 @@ def dashboard():
 @app.route("/support", methods=["GET", "POST"])
 @login_required
 def support():
-    _ovr = _static_override("/support")
-    if _ovr is not None:
-        return _ovr
     u = current_user()
     # نبحث عن تذكرة مفتوحة للمستخدم، أو نعمل واحدة
     t = db().execute("SELECT * FROM tickets WHERE user_id=? AND status='open' ORDER BY id DESC LIMIT 1", (u["user_id"],)).fetchone()
@@ -3229,9 +3314,6 @@ def support_history():
 
 @app.route("/store")
 def store():
-    _ovr = _static_override("/store")
-    if _ovr is not None:
-        return _ovr
     platform = request.args.get("platform", "").strip()
     # توحيد اسم تيليجرام (يدعم telegram أو Telegram (Session))
     if platform.lower() == "telegram":
@@ -4537,10 +4619,6 @@ def admin_stats():
       <div style="font-size:16px; font-weight:900; margin-bottom:12px; color:var(--muted);">{ico("settings", 20)} أخرى</div>
       <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px;">
         <div class="card" style="text-align:center; padding:16px;">
-          <div style="font-size:24px; font-weight:900; color:var(--text);">{premium_numbers}</div>
-          <div style="font-size:12px; color:var(--muted);">أرقام مميزة</div>
-        </div>
-        <div class="card" style="text-align:center; padding:16px;">
           <div style="font-size:24px; font-weight:900; color:var(--text);">{total_coupons}</div>
           <div style="font-size:12px; color:var(--muted);">كوبونات</div>
         </div>
@@ -4639,7 +4717,6 @@ def admin_icons():
               <option value="wallet">أيقونة المحفظة (wallet)</option>
               <option value="user">أيقونة المستخدم (user)</option>
               <option value="home">أيقونة الرئيسية (home)</option>
-              <option value="premium_icon">شعار الأرقام المميزة (premium_icon)</option>
               <option value="login_hero">صورة صفحة تسجيل الدخول (login_hero)</option>
               <option value="custom">-- مفتاح مخصص --</option>
             </select>
@@ -4670,7 +4747,6 @@ def admin_icons():
               <option value="wallet">أيقونة المحفظة (wallet)</option>
               <option value="user">أيقونة المستخدم (user)</option>
               <option value="home">أيقونة الرئيسية (home)</option>
-              <option value="premium_icon">شعار الأرقام المميزة (premium_icon)</option>
               <option value="login_hero">صورة صفحة تسجيل الدخول (login_hero)</option>
               <option value="custom">-- مفتاح مخصص --</option>
             </select>
@@ -4748,9 +4824,6 @@ def admin_icons_delete():
 @app.route("/sell", methods=["GET"])
 @login_required
 def sell():
-    _ovr = _static_override("/sell")
-    if _ovr is not None:
-        return _ovr
     return page("sell")
 
 @app.route("/sell/request", methods=["POST"])
@@ -4989,8 +5062,6 @@ def admin_pending_sellers():
             body += '<select name="platform" required style="padding:10px; margin-bottom:8px; width:100%; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:8px; font-family:inherit;"><option value="Telegram (Session)">تيليجرام</option><option value="WhatsApp">واتساب</option></select>'
             body += '<input name="price" type="number" step="0.01" min="0.1" placeholder="السعر" required style="padding:10px; margin-bottom:8px; width:100%; background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:8px; font-family:inherit;">'
             body += '<label style="display:flex; align-items:center; gap:8px; padding:10px; margin-bottom:8px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:8px; cursor:pointer;">'
-            body += '<input type="checkbox" name="is_premium" style="width:18px; height:18px; accent-color:#f59e0b; cursor:pointer;">'
-            body += '<span style="font-size:13px; font-weight:700; color:#f59e0b;">⭐ رقم مميز</span>'
             body += '</label>'
             body += '<button name="action" value="claim" class="btn btn-sm" style="margin-left:4px;">نقل لي</button>'
             body += '<button name="action" value="list" class="btn btn-sm" style="background:var(--success); margin-left:4px;">عرض للبيع</button>'
@@ -6067,6 +6138,62 @@ def get_live_events():
         events = [{"type": "info", "user": "متجر مطري", "text": "تسليم فوري وأرقام موثوقة 100%"}]
     return events
 
+STORE_NAV_JS = """<script>
+(function(){
+  if (window.__storeNavBound) return;
+  window.__storeNavBound = true;
+  var busy = false;
+  function swap(html, url){
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var next = doc.getElementById('storeMain');
+    var cur = document.getElementById('storeMain');
+    if (!next || !cur) return false;
+    cur.innerHTML = next.innerHTML;
+    cur.querySelectorAll('script').forEach(function(old){
+      var s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    });
+    if (doc.title) document.title = doc.title;
+    history.pushState({storeNav: true}, '', url);
+    return true;
+  }
+  document.addEventListener('click', function(e){
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var target = e.target && e.target.closest ? e.target.closest('#storeMain a[href^="/store?platform="]') : null;
+    if (!target) return;
+    e.preventDefault();
+    if (busy) return;
+    var url = target.getAttribute('href');
+    var box = document.getElementById('storeMain');
+    busy = true;
+    if (box) box.style.opacity = '0.5';
+    fetch(url, {credentials: 'same-origin'})
+      .then(function(r){ if (!r.ok) throw new Error('bad'); return r.text(); })
+      .then(function(html){ if (!swap(html, url)) location.href = url; })
+      .catch(function(){ location.href = url; })
+      .then(function(){
+        busy = false;
+        var c = document.getElementById('storeMain');
+        if (c) c.style.opacity = '';
+      });
+  });
+  window.addEventListener('popstate', function(){
+    if (location.pathname === '/store') location.reload();
+  });
+})();
+</script>"""
+
+
+
+BACK_TARGETS = {'deposit': ('/dashboard', 'لوحة المستخدم'), 'deposit_menu': ('/deposit', 'الشحن'), 'deposit_sub': ('/deposit', 'الشحن'), 'sell': ('/dashboard', 'لوحة المستخدم'), 'sell_verify': ('/sell', 'بيع رقم'), 'sell_2fa': ('/sell', 'بيع رقم'), 'sell_remove_2fa': ('/sell', 'بيع رقم'), 'referral': ('/dashboard', 'لوحة المستخدم'), 'transfer': ('/dashboard', 'لوحة المستخدم'), 'vip': ('/dashboard', 'لوحة المستخدم'), 'profile': ('/dashboard', 'لوحة المستخدم'), 'my_numbers': ('/dashboard', 'لوحة المستخدم'), 'about_page': ('/dashboard', 'لوحة المستخدم')}
+
+
+def _back_bar(href, label):
+    return ('<div class="back-bar"><a class="back-pill" href="%s" data-back="1">%s<span>رجوع</span></a></div>'
+            % (href, ico("arrow-right", 16)))
+
+
 def page(name, active="", **ctx):
     u = current_user()
     ticker_code = ""  # تعريف آمن لتجنب UnboundLocalError
@@ -6080,6 +6207,9 @@ def page(name, active="", **ctx):
         border = "rgba(16,185,129,0.3)" if c == "success" else ("rgba(239,68,68,0.3)" if c == "error" else "rgba(99,102,241,0.3)")
         fh += f'''<div class="toast-message" style="display:flex;align-items:center;gap:12px;background:{bg};border:1px solid {border};padding:14px 18px;border-radius:14px;margin-bottom:10px;color:{color};font-weight:600;font-size:14px;animation: slideDown 0.4s ease; position: relative; backdrop-filter: blur(10px);"><div style="flex-shrink:0;">{ico(icon, 20)}</div><div style="flex:1; line-height:1.5;">{m}</div><button onclick="this.parentElement.style.display='none'" style="background:none;border:none;color:{color};cursor:pointer;opacity:0.6;padding:0;display:flex;">{ico("x", 18)}</button></div>'''
 
+    _bt = BACK_TARGETS.get(name)
+    if _bt:
+        fh = _back_bar(_bt[0], _bt[1]) + fh
     ticker_template = """<div id="liveTicker" style="position:fixed;top:75px;left:50%;transform:translateX(-50%) translateY(-30px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px 24px;background:rgba(20,20,40,0.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1.5px solid rgba(251,191,36,0.4);border-radius:50px;box-shadow:0 10px 40px rgba(0,0,0,0.6), 0 0 30px rgba(251,191,36,0.15);opacity:0;transition:all 0.5s cubic-bezier(0.4,0,0.2,1);max-width:92vw;overflow:hidden;">
     <div id="tickerInner" style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         <svg id="tickerIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
@@ -6157,8 +6287,6 @@ def page(name, active="", **ctx):
     
     # لو الصفحة جاية بـ body جاهز، نستخدمه على طول
     if ctx.get("body"):
-        if getattr(_CAPTURE, "on", False):
-            return ctx["body"]
         return f'''<!DOCTYPE html>
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
@@ -6171,14 +6299,14 @@ def page(name, active="", **ctx):
   <meta name="theme-color" content="#6366f1">
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@700;800;900&display=swap" rel="stylesheet">
   <style>{CSS}</style>
-  <style>{SMOOTH_CSS}{DASH_CSS_EXTRA}</style>
+  <style>{SMOOTH_CSS}</style>
 </head>
 <body>
 {ticker_code}
-{_nav(u)}
-{_bottom_nav(u, active)}
-<div class="container" style="padding-top:16px;padding-bottom:0">{fh}</div>
-{Markup(ctx["body"])}
+<div id="topNavWrap" style="display:contents">{_nav(u)}</div>
+<div id="botNavWrap" style="display:contents">{_bottom_nav(u, active)}</div>
+<div id="pageHead" class="container" style="padding-top:16px;padding-bottom:0">{fh}</div>
+<div id="pageMain" style="display:contents">{Markup(ctx["body"])}</div>
 <div style="text-align:center; padding: 30px 0 20px 0; width: 100%;">
   <div style="display:inline-flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--border); padding:10px 18px; border-radius:30px; font-size:12px; font-weight:700; color:var(--muted); box-shadow:0 4px 12px rgba(0,0,0,0.2);">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -6434,7 +6562,7 @@ def page(name, active="", **ctx):
                 # بناء شرائح الأرقام (slides) لكل رقم في الدولة
                 slides_inner = ""
                 for n in nums:
-                    is_prem = bool(n["is_premium"] if "is_premium" in n.keys() else 0)
+                    is_prem = False  # الختم يظهر فقط من نظام الختوم
                     premium_border = "2px solid #f59e0b" if is_prem else "1px solid rgba(99,102,241,0.25)"
                     premium_shadow = "0 0 20px rgba(245,158,11,0.4)" if is_prem else "none"
                     masked = mask_phone(n["phone"])
@@ -6449,35 +6577,7 @@ def page(name, active="", **ctx):
                         '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">'
                         f'<span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; font-size:10px; font-weight:800; background:linear-gradient(135deg, rgba(99,102,241,0.2), rgba(6,182,212,0.2)); color:#a5b4fc; border-radius:20px; border:1px solid rgba(99,102,241,0.3);">{plt_icon_inner} {platform_label}</span>'
                         '<div style="display:flex; align-items:center; gap:6px;">'
-                        + ('<div style="width:38px; height:38px; flex-shrink:0; display:flex; align-items:center; justify-content:center; position:relative;">'
-                           '<svg viewBox="0 0 100 100" style="width:100%; height:100%; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.6)) drop-shadow(0 0 8px rgba(245,158,11,0.3));">'
-                           '<defs>'
-                           '<linearGradient id="goldSeal' + str(n["id"]) + '" x1="0%" y1="0%" x2="100%" y2="100%">'
-                           '<stop offset="0%" stop-color="#fbbf24"/>'
-                           '<stop offset="50%" stop-color="#f59e0b"/>'
-                           '<stop offset="100%" stop-color="#b45309"/>'
-                           '</linearGradient>'
-                           '<radialGradient id="sealHighlight' + str(n["id"]) + '" cx="30%" cy="30%" r="50%">'
-                           '<stop offset="0%" stop-color="#fde68a" stop-opacity="0.6"/>'
-                           '<stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>'
-                           '</radialGradient>'
-                           '</defs>'
-                           # قاعدة الختم الدائرية
-                           '<circle cx="50" cy="50" r="46" fill="url(#goldSeal' + str(n["id"]) + ')"/>'
-                           '<circle cx="50" cy="50" r="46" fill="url(#sealHighlight' + str(n["id"]) + ')"/>'
-                           # حلقة خارجية مزدوجة (زي ختم رسمي)
-                           '<circle cx="50" cy="50" r="42" fill="none" stroke="#fff" stroke-width="1.5" opacity="0.7"/>'
-                           '<circle cx="50" cy="50" r="37" fill="none" stroke="#fff" stroke-width="0.8" opacity="0.5"/>'
-                           # نجوم صغيرة في الأعلى (زي أختام المدارس)
-                           '<path d="M50 8 L52 14 L58 14 L53 18 L55 24 L50 20 L45 24 L47 18 L42 14 L48 14 Z" fill="#fff" opacity="0.9"/>'
-                           # حرف M كبير كلاسيكي (بخط Serif)
-                           '<text x="50" y="55" font-family="Georgia, Times New Roman, serif" font-size="36" font-weight="900" font-style="italic" fill="#fff" text-anchor="middle" style="filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4))">M</text>'
-                           # خط فاصل
-                           '<line x1="28" y1="64" x2="72" y2="64" stroke="#fff" stroke-width="1.2" opacity="0.7"/>'
-                           # كلمة مميز بخط صغير تحتها
-                           '<text x="50" y="78" font-family="Cairo, sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle" letter-spacing="1.5">مميز</text>'
-                           '</svg>'
-                           '</div>' if is_prem else '') +
+                        + _stamp_badges_html(n) +
                         '<span style="padding:3px 10px; font-size:9px; font-weight:900; background:rgba(16,185,129,0.15); color:#10b981; border-radius:20px; border:1px solid rgba(16,185,129,0.3);">● متاح</span>'
                         '</div>'
 
@@ -6560,7 +6660,7 @@ def page(name, active="", **ctx):
             pag = f'<div style="display:flex;gap:6px;justify-content:center;margin-top:32px;flex-wrap:wrap">{"".join(parts)}</div>'
 
         # بناء شريط فلاتر الدول
-        body = f'''<div class="container" style="padding-top:16px">
+        body = f'''<div id="storeMain" class="container" style="padding-top:16px">
           <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             المتجر <span class="section-sub">({ctx["total"]} رقم متاح)</span>
           </div>
@@ -6581,7 +6681,8 @@ def page(name, active="", **ctx):
 
           <div style="margin-top:16px">{carousel_html}</div>
           {pag}
-        </div>'''
+        </div>
+        {STORE_NAV_JS}'''
 
 
     elif name == "buy":
@@ -6781,11 +6882,8 @@ def page(name, active="", **ctx):
             if is_new:
                 new_badge = '<span style="background:#ef4444;color:#fff;font-size:9px;font-weight:900;padding:3px 8px;border-radius:20px;animation:pulse 1.5s infinite;">جديد</span>'
             
-            if bool(n["is_premium"] if "is_premium" in n.keys() else 0):
-                _default_prem = '<svg viewBox="0 0 100 100" style="width:100%;height:100%;filter:drop-shadow(0 2px 5px rgba(0,0,0,.6))"><defs><linearGradient id="gs' + str(nid) + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset=".5" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#gs' + str(nid) + ')"/><circle cx="50" cy="50" r="42" fill="none" stroke="#fff" stroke-width="1.5" opacity=".7"/><text x="50" y="52" font-family="Georgia,serif" font-size="32" font-weight="900" font-style="italic" fill="#fff" text-anchor="middle">M</text><text x="50" y="78" font-family="Cairo,sans-serif" font-size="14" font-weight="900" fill="#fff" text-anchor="middle">مميز</text></svg>'
-                _prem_img = site_icon("premium_icon", 22, _default_prem)
-                new_badge += '<div style="width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;margin-right:2px;">' + _prem_img + '</div>'
 
+            new_badge += _stamp_badges_html(n)
             # لون خلفية خفيف حسب المنصة
             if "telegram" in platform_lower or "session" in platform_lower:
                 bg_style = "background: linear-gradient(145deg, rgba(6,182,212,0.08), rgba(6,182,212,0.02));"
@@ -7891,16 +7989,13 @@ def page(name, active="", **ctx):
             if is_new:
                 new_badge = '<span style="background:#ef4444;color:#fff;font-size:9px;font-weight:900;padding:3px 8px;border-radius:20px;animation:pulse 1.5s infinite;">جديد</span>'
                         # إضافة بادج "مميز" لو الرقم مميز
-            is_prem = bool(n["is_premium"] if "is_premium" in n.keys() else 0)
+            is_prem = False  # الختم يظهر فقط من نظام الختوم
 
             new_badge = ""
             if is_new:
                 new_badge = '<span style="background:#ef4444;color:#fff;font-size:9px;font-weight:900;padding:3px 8px;border-radius:20px;animation:pulse 1.5s infinite;">جديد</span>'
                 
-            if bool(n["is_premium"] if "is_premium" in n.keys() else 0):
-                _default_prem = '<svg viewBox="0 0 100 100" style="width:100%;height:100%;filter:drop-shadow(0 2px 5px rgba(0,0,0,.6))"><defs><linearGradient id="gs' + str(n["id"]) + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset=".5" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#gs' + str(n["id"]) + ')"/><circle cx="50" cy="50" r="42" fill="none" stroke="#fff" stroke-width="1.5" opacity=".7"/><text x="50" y="52" font-family="Georgia,serif" font-size="32" font-weight="900" font-style="italic" fill="#fff" text-anchor="middle">M</text><text x="50" y="78" font-family="Cairo,sans-serif" font-size="14" font-weight="900" fill="#fff" text-anchor="middle">مميز</text></svg>'
-                _prem_img = site_icon("premium_icon", 22, _default_prem)
-                new_badge += '<div style="width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;margin-right:4px;">' + _prem_img + '</div>'
+            new_badge += _stamp_badges_html(n)
             border_style = f'border-right:4px solid {border_color};' if is_new else f'border-right:4px solid {border_color};opacity:0.7;'
             import time as _time
             from datetime import datetime as _dt
@@ -8385,11 +8480,9 @@ def page(name, active="", **ctx):
             {tile("/admin/pending_sellers", "أرقام المستخدمين", '<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>', "var(--warn)", pending_numbers)}
             {tile("/admin/sold", "الأرقام المباعة", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', "var(--primary2)")}
             {tile("/admin/database", "إدارة قاعدة البيانات", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>', "var(--primary)")}
-            {tile("/admin/pages", "الصفحات المخصصة", ico("file", 24), "var(--primary)")}
-            {tile("/admin/links", "الأزرار والروابط", ico("list", 24), "var(--primary2)")}
-            {tile("/admin/dev-history", "تاريخ التطوير", ico("refresh", 24), "var(--success)")}
-            {tile("/admin/static-pages", "الصفحات الثابتة", ico("globe", 24), "var(--primary)")}
-            {tile("/admin/dashboard-blocks", "بلوكات لوحة المستخدم", ico("settings", 24), "var(--primary2)")}
+            {tile("/admin/errors", "الأخطاء والإصلاح الذكي", ico("shield", 24), "var(--danger)")}
+            {tile("/admin/bulk-delete", "الحذف الجماعي", ico("trash", 24), "var(--danger)")}
+            {tile("/admin/stamps", "الختوم", ico("star", 24), "var(--warn)")}
           </div>
         </div>'''
         body += _BACKUP_PROGRESS_BLOCK
@@ -8781,8 +8874,6 @@ function testConnection(url, btn, resultId) {{
               <input name="phone" placeholder="+967777123456 (سيكتشف الدولة تلقائياً)" required style="padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:8px;direction:ltr">
               <input name="price" type="number" step="0.01" placeholder="السعر" required style="padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:8px">
               <label style="display:flex; align-items:center; gap:8px; padding:10px 14px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:8px; cursor:pointer;">
-                <input type="checkbox" name="is_premium" style="width:18px; height:18px; accent-color:#f59e0b; cursor:pointer;">
-                <span style="font-size:13px; font-weight:700; color:#f59e0b;">⭐ رقم مميز</span>
               </label>
               <button class="btn">إضافة</button>
             </form>
@@ -8794,7 +8885,7 @@ function testConnection(url, btn, resultId) {{
               if (newPrice === null) return;
               var newPlat = prompt('المنصة (اكتب WhatsApp أو Telegram (Session)):', platform);
               if (newPlat === null) return;
-              var isPrem = confirm('هل تريد جعله رقماً مميزاً؟ (OK = نعم، Cancel = لا)');
+              var isPrem = !!isPremium;
               
               var form = document.createElement('form');
               form.method = 'POST';
@@ -8939,14 +9030,14 @@ window.requestCode = function(evt, nid) {
     });
 };
 window.showVerify = function(nid) {
-    document.getElementById('verifyArea').innerHTML = '<div class="card" style="margin-bottom:20px;border-color:var(--primary)"><h3>تأكيد الكود للرقم #' + nid + '</h3><input id="codeInput_' + nid + '" placeholder="أدخل الكود" style="width:100%;padding:12px;margin:12px 0;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:monospace;text-align:center;font-size:18px;letter-spacing:4px"><div style="display:flex;gap:8px;margin-bottom:12px;"><select id="platInput_' + nid + '" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"><option value="Telegram (Session)" selected>Telegram (Session)</option><option value="WhatsApp">WhatsApp</option></select><input id="priceInput_' + nid + '" type="number" step="0.01" min="0.01" value="1.00" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;direction:ltr;"></div><label style="display:flex;align-items:center;gap:8px;padding:10px;margin-bottom:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;cursor:pointer;"><input type="checkbox" id="isPremium_' + nid + '" style="width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;"><span style="font-size:13px;font-weight:700;color:#f59e0b;">⭐ رقم مميز</span></label><button class="btn" onclick="verifyCode(' + nid + ')">تأكيد</button><div id="verifyResult_' + nid + '" style="margin-top:12px"></div></div>';
+    document.getElementById('verifyArea').innerHTML = '<div class="card" style="margin-bottom:20px;border-color:var(--primary)"><h3>تأكيد الكود للرقم #' + nid + '</h3><input id="codeInput_' + nid + '" placeholder="أدخل الكود" style="width:100%;padding:12px;margin:12px 0;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:monospace;text-align:center;font-size:18px;letter-spacing:4px"><div style="display:flex;gap:8px;margin-bottom:12px;"><select id="platInput_' + nid + '" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;"><option value="Telegram (Session)" selected>Telegram (Session)</option><option value="WhatsApp">WhatsApp</option></select><input id="priceInput_' + nid + '" type="number" step="0.01" min="0.01" value="1.00" style="flex:1;padding:10px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;direction:ltr;"></div><button class="btn" onclick="verifyCode(' + nid + ')">تأكيد</button><div id="verifyResult_' + nid + '" style="margin-top:12px"></div></div>';
 }
 function verifyCode(nid) {
     var code = document.getElementById('codeInput_' + nid).value;
     fetch('/admin/tg/' + nid + '/verify', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'code=' + encodeURIComponent(code) + '&platform=' + encodeURIComponent(document.getElementById('platInput_' + nid).value) + '&price=' + encodeURIComponent(document.getElementById('priceInput_' + nid).value) + '&is_premium=' + (document.getElementById('isPremium_' + nid).checked ? 'on' : 'off')
+        body: 'code=' + encodeURIComponent(code) + '&platform=' + encodeURIComponent(document.getElementById('platInput_' + nid).value) + '&price=' + encodeURIComponent(document.getElementById('priceInput_' + nid).value) + '&is_premium=' + 'off'
     }).then(r => r.json()).then(d => {
         var res = document.getElementById('verifyResult_' + nid);
         if (d.ok) {
@@ -9227,8 +9318,6 @@ function changePlatform(nid) {
             print(f"[TICKER] خطأ: {e}")
             ticker_code = ""
 
-    if getattr(_CAPTURE, "on", False):
-        return body
     return f'''<!DOCTYPE html>
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
@@ -9246,15 +9335,15 @@ function changePlatform(nid) {
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@700;800;900&display=swap" rel="stylesheet">
   <style>{CSS}</style>
-  <style>{SMOOTH_CSS}{DASH_CSS_EXTRA}</style>
+  <style>{SMOOTH_CSS}</style>
 </head>
 <body>
 {ticker_code}
-{_nav(u)}
-{_bottom_nav(u, active)}
+<div id="topNavWrap" style="display:contents">{_nav(u)}</div>
+<div id="botNavWrap" style="display:contents">{_bottom_nav(u, active)}</div>
 {announcement_html}
-<div class="container" style="padding-top:16px;padding-bottom:0">{fh}</div>
-{body}{_pb_dashboard_block(u) if name == "dashboard" else ""}
+<div id="pageHead" class="container" style="padding-top:16px;padding-bottom:0">{fh}</div>
+<div id="pageMain" style="display:contents">{body}</div>
 
 <div style="text-align:center; padding: 30px 0 20px 0; width: 100%;">
   <div style="display:inline-flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--border); padding:10px 18px; border-radius:30px; font-size:12px; font-weight:700; color:var(--muted); box-shadow:0 4px 12px rgba(0,0,0,0.2);">
@@ -10288,23 +10377,68 @@ def _create_zip_backup_internal():
         log.error(f"فشل ZIP للحدث: {e}")
         return False, str(e)
 
-def _send_backup_to_telegram(bak_file):
-    """يرسل ملف النسخة إلى تيليجرام في الخلفية."""
+def _backup_bot_creds():
+    """التوكن والآيدي: من متغيرات البيئة أولاً، ثم من إعدادات الموقع، ثم الافتراضي."""
+    token = os.environ.get("BACKUP_BOT_TOKEN") or ""
+    chat_id = os.environ.get("BACKUP_CHAT_ID") or ""
+    if not token or not chat_id:
+        try:
+            with app.app_context():
+                token = token or get_setting("BACKUP_BOT_TOKEN", "") or ""
+                chat_id = chat_id or get_setting("BACKUP_CHAT_ID", "") or ""
+        except Exception:
+            pass
+    if not token:
+        token = DEFAULT_SETTINGS.get("BACKUP_BOT_TOKEN", "")
+    if not chat_id:
+        chat_id = DEFAULT_SETTINGS.get("BACKUP_CHAT_ID", "")
+    return token, chat_id
+
+
+def _backup_send_ok(bak_file, caption="نسخة احتياطية جديدة"):
+    """يرسل الملف ويتحقق من رد تيليجرام فعلياً. يرجع (True/False, الرسالة)."""
+    import requests
+    token, chat_id = _backup_bot_creds()
+    if not token or not chat_id or "ضع_" in token:
+        msg = "BACKUP_BOT_TOKEN أو BACKUP_CHAT_ID غير مهيأ"
+        log.warning("[BACKUP] %s", msg)
+        return False, msg
+    size = os.path.getsize(bak_file)
+    if size > 49 * 1024 * 1024:
+        msg = "حجم النسخة %d MB أكبر من حد تيليجرام (50MB)" % (size // (1024 * 1024))
+        log.warning("[BACKUP] %s", msg)
+        return False, msg
     try:
-        import requests
-        token = os.environ.get("BACKUP_BOT_TOKEN") or DEFAULT_SETTINGS.get("BACKUP_BOT_TOKEN", "")
-        chat_id = os.environ.get("BACKUP_CHAT_ID") or DEFAULT_SETTINGS.get("BACKUP_CHAT_ID", "")
-        if token and chat_id and "ضع_" not in token:
-            with open(bak_file, "rb") as f:
-                requests.post(
-                    f"https://api.telegram.org/bot{token}/sendDocument",
-                    data={"chat_id": chat_id, "caption": "📦 نسخة احتياطية جديدة (حدث جديد)"},
-                    files={"document": f},
-                    timeout=30
-                )
-            log.info("✅ تم إرسال النسخة إلى تيليجرام بنجاح!")
+        with open(bak_file, "rb") as f:
+            r = requests.post(
+                "https://api.telegram.org/bot%s/sendDocument" % token,
+                data={"chat_id": chat_id, "caption": caption + " - " + os.path.basename(bak_file)},
+                files={"document": f}, timeout=180)
+        body = {}
+        try:
+            body = r.json()
+        except Exception:
+            pass
+        if r.ok and body.get("ok"):
+            log.info("[BACKUP] تم إرسال %s إلى تيليجرام", os.path.basename(bak_file))
+            return True, "تم الإرسال"
+        msg = "رفض تيليجرام الإرسال (%s): %s" % (r.status_code, str(body.get("description", ""))[:200])
+        log.warning("[BACKUP] %s", msg)
+        return False, msg
     except Exception as e:
-        log.warning(f"فشل إرسال النسخة إلى تيليجرام: {e}")
+        # نخفي التوكن من رسالة الخطأ لأنها تحتوي الرابط كامل
+        text = str(e).replace(token, "***")
+        log.warning("[BACKUP] فشل الإرسال: %s", text)
+        return False, text
+
+
+def _send_backup_to_telegram(bak_file):
+    """يرسل ملف النسخة إلى تيليجرام في الخلفية، ويسجل النتيجة الحقيقية."""
+    try:
+        _backup_send_ok(bak_file)
+    except Exception as e:
+        log.warning("[BACKUP] خطأ غير متوقع: %s", str(e).replace(os.environ.get("BACKUP_BOT_TOKEN") or "@@", "***")[:300])
+
 
 def _delayed_backup_sender():
     """دالة داخلية تنتظر 5 ثواني قبل إرسال النسخة (حماية من إغراق البوت)."""
@@ -10319,6 +10453,7 @@ def _delayed_backup_sender():
     ok, bak_file = _create_zip_backup_internal()
     if ok:
         _send_backup_to_telegram(bak_file)
+
 
 def make_safe_backup():
     """ينشئ نسخة احتياطية ZIP كاملة (DB + web.py + static)"""
@@ -10923,11 +11058,6 @@ def create_snapshot_zip():
     return path
 
 
-def _backup_bot_creds():
-    """يقرأ توكن وآيدي النسخ الاحتياطي (يُستدعى داخل طلب، لأن get_setting يحتاج سياق Flask)."""
-    token = os.environ.get("BACKUP_BOT_TOKEN") or get_setting("BACKUP_BOT_TOKEN", "") or DEFAULT_SETTINGS.get("BACKUP_BOT_TOKEN", "")
-    chat_id = os.environ.get("BACKUP_CHAT_ID") or get_setting("BACKUP_CHAT_ID", "") or DEFAULT_SETTINGS.get("BACKUP_CHAT_ID", "")
-    return token, chat_id
 
 
 def send_snapshot_to_telegram(path, token, chat_id):
@@ -11295,815 +11425,88 @@ def admin_database_add_table():
 import html as _html_mod
 from html.parser import HTMLParser as _PBHTMLParser
 
-PB_POSITIONS = ("block", "navbar", "links_page")
-PB_TARGETS = ("all", "admin", "user")
-PB_MAX_HTML = 200000
-DEV_TYPES = {
-    "feature": ("ميزة جديدة", "#10b981"),
-    "fix": ("إصلاح", "#ef4444"),
-    "update": ("تحديث", "#3b82f6"),
-    "hotfix": ("إصلاح عاجل", "#a855f7"),
-}
-
-# ---------- تنظيف HTML (قائمة سماح، بدون مكتبات خارجية) ----------
-_PB_ALLOWED_TAGS = {"p", "br", "b", "strong", "i", "em", "u", "ul", "ol", "li",
-                    "h1", "h2", "h3", "h4", "blockquote", "a", "img", "span",
-                    "div", "hr", "code", "pre", "small"}
-_PB_VOID_TAGS = {"br", "hr", "img"}
-_PB_DROP_TAGS = {"script", "style", "iframe", "object", "embed", "noscript", "template",
-                 "svg", "math", "form", "input", "button", "select", "textarea",
-                 "link", "meta", "base", "frame", "frameset", "applet", "audio", "video"}
-_PB_ATTRS = {
-    "a": ("href", "title"),
-    "img": ("src", "alt", "width", "height"),
-    "span": ("style",), "div": ("style",), "p": ("style",),
-    "h1": ("style",), "h2": ("style",), "h3": ("style",), "h4": ("style",),
-    "li": ("style",), "b": ("style",), "strong": ("style",),
-}
-_PB_STYLE_DECL = re.compile(
-    r"^(color|background-color|text-align|font-size|font-weight|font-style|text-decoration)"
-    r"\s*:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z-]+|-?\d+(\.\d+)?(px|em|rem|%)?)$")
-_PB_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
-
-
-def _pb_clean_style(value):
-    keep = []
-    for decl in (value or "").split(";"):
-        decl = decl.strip()
-        if decl and _PB_STYLE_DECL.match(decl):
-            keep.append(decl)
-    return "; ".join(keep)
-
-
-def _pb_safe_url(value):
-    """يقبل روابط http/https والمسارات النسبية (/...) و #... فقط. يرفض javascript: و data: وغيرها."""
-    raw = (value or "").strip()
-    if not raw or len(raw) > 2000:
-        return None
-    compact = re.sub(r"[\x00-\x20\x7f]", "", raw).lower()
-    if compact.startswith(("http://", "https://")):
-        return raw
-    if raw.startswith("/") and not compact.startswith("//") and "\\" not in raw:
-        return raw
-    if raw.startswith("#"):
-        return raw
-    return None
-
-
-class _PBSanitizer(_PBHTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.out = []
-        self.drop = 0
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        if tag in _PB_DROP_TAGS:
-            if tag not in _PB_VOID_TAGS:
-                self.drop += 1
-            return
-        if self.drop or tag not in _PB_ALLOWED_TAGS:
-            return
-        parts = []
-        allowed = _PB_ATTRS.get(tag, ())
-        for key, val in attrs:
-            key = (key or "").lower()
-            val = val or ""
-            if key not in allowed:
-                continue
-            if key == "href":
-                url = _pb_safe_url(val)
-                if url is None:
-                    continue
-                parts.append(' href="%s"' % _html_mod.escape(url, quote=True))
-                if url.lower().startswith("http"):
-                    parts.append(' target="_blank" rel="noopener noreferrer"')
-            elif key == "src":
-                url = _pb_safe_url(val)
-                if url is None or not (url.startswith("http") or url.startswith("/static/")):
-                    continue
-                parts.append(' src="%s"' % _html_mod.escape(url, quote=True))
-            elif key == "style":
-                style = _pb_clean_style(val)
-                if style:
-                    parts.append(' style="%s"' % _html_mod.escape(style, quote=True))
-            elif key in ("width", "height"):
-                if re.match(r"^\d{1,4}$", val):
-                    parts.append(' %s="%s"' % (key, val))
-            elif key in ("alt", "title"):
-                parts.append(' %s="%s"' % (key, _html_mod.escape(val, quote=True)))
-        self.out.append("<%s%s>" % (tag, "".join(parts)))
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        if tag in _PB_DROP_TAGS:
-            if tag not in _PB_VOID_TAGS and self.drop:
-                self.drop -= 1
-            return
-        if self.drop or tag not in _PB_ALLOWED_TAGS or tag in _PB_VOID_TAGS:
-            return
-        self.out.append("</%s>" % tag)
-
-    def handle_data(self, data):
-        if not self.drop:
-            self.out.append(_html_mod.escape(data, quote=False))
-
-
-def sanitize_html(raw):
-    """ينظف HTML من script/iframe/on*/javascript: ويعيد HTML آمناً فقط."""
-    parser = _PBSanitizer()
-    parser.feed(str(raw or "")[:PB_MAX_HTML])
-    parser.close()
-    return "".join(parser.out)
-
-
-def slugify(text):
-    s = re.sub(r"[^a-z0-9-]+", "-", (text or "").strip().lower())
-    s = re.sub(r"-+", "-", s).strip("-")
-    return s[:80] or ("page-" + secrets.token_hex(3))
-
-
-def _pb_color(value):
-    value = (value or "").strip()
-    return value if _PB_COLOR.match(value) else "#6366f1"
-
-
-# ---------- قراءة الروابط حسب المكان والجمهور ----------
-def _pb_visible(u, position):
-    rows = db().execute("SELECT * FROM custom_links WHERE position=? AND is_active=1 "
-                        "ORDER BY sort_order ASC, id ASC", (position,)).fetchall()
-    admin = is_admin(u)
-    logged = bool(u)
-    out = []
-    for r in rows:
-        t = r["target_users"] or "all"
-        if t == "all" or (t == "admin" and admin) or (t == "user" and logged and not admin):
-            out.append(r)
-    return out
-
-
-def _pb_icon(name, size=18):
-    return ico(name, size) or ico("globe", size)
-
-
-def _pb_link_card(r):
-    href = _pb_safe_url(r["url"]) or "#"
-    return ('<a class="pb-card" href="%s" style="--pb-c:%s">'
-            '<span class="pb-ico">%s</span><span class="pb-title">%s</span></a>') % (
-        esc(href), _pb_color(r["color"]), _pb_icon(r["icon_name"], 22), esc(r["title"]))
-
-
-def _pb_navbar_html(u):
-    links = _pb_visible(u, "navbar")
-    if not links:
-        return ""
-    items = ""
-    for r in links:
-        href = _pb_safe_url(r["url"]) or "#"
-        items += ('<a class="pb-nav" href="%s" title="%s">%s<span>%s</span></a>') % (
-            esc(href), esc(r["title"]), _pb_icon(r["icon_name"], 16), esc(r["title"]))
-    return '<div class="pb-nav-wrap">' + items + '</div>'
-
-
-# ---------- سجل التطوير: إنشاء نسخة + تسجيل ----------
-def _dev_next_version():
-    prefix = datetime.now().strftime("v%Y.%m.%d.")
-    n = db().execute("SELECT COUNT(*) c FROM dev_history WHERE version LIKE ?",
-                     (prefix + "%",)).fetchone()["c"] + 1
-    while db().execute("SELECT 1 FROM dev_history WHERE version=?", (prefix + "%02d" % n,)).fetchone():
-        n += 1
-    return prefix + "%02d" % n
-
-
-def _dev_prune(keep=50):
-    import shutil
-    rows = db().execute("SELECT id, version FROM dev_history ORDER BY id DESC").fetchall()
-    for r in rows[keep:]:
-        shutil.rmtree(os.path.join(BASE_DIR, "backups", "versions", r["version"]), ignore_errors=True)
-        db().execute("DELETE FROM dev_history WHERE id=?", (r["id"],))
-    db().commit()
-
-
-def log_dev_change(title, description="", change_type="update", files_changed=None,
-                   db_changes=None, created_by=None):
-    """ينشئ نسخة كاملة (matari.db + web.py + static) في ZIP، ويسجلها في dev_history،
-    ويرسلها إلى تيليجرام في الخلفية، ويحتفظ بآخر 50 نسخة فقط."""
-    import zipfile
-    import json
-    if change_type not in DEV_TYPES:
-        change_type = "update"
-    if created_by is None:
-        try:
-            created_by = session.get("user_id")
-        except RuntimeError:
-            created_by = None
-    version = _dev_next_version()
-    vdir = os.path.join(BASE_DIR, "backups", "versions", version)
-    os.makedirs(vdir, exist_ok=True)
-    tmp_db = os.path.join(vdir, "matari.db")
-    src = sqlite3.connect(DB_PATH, timeout=30)
-    dst = sqlite3.connect(tmp_db)
-    try:
-        src.backup(dst)
-    finally:
-        dst.close()
-        src.close()
-    zip_path = os.path.join(vdir, version + ".zip")
-    files = []
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(tmp_db, "matari.db")
-        files.append("matari.db")
-        wp = os.path.join(BASE_DIR, "web.py")
-        if os.path.exists(wp):
-            zf.write(wp, "web.py")
-            files.append("web.py")
-        static_dir = os.path.join(BASE_DIR, "static")
-        if os.path.isdir(static_dir):
-            for root, _dirs, fnames in os.walk(static_dir):
-                for fn in fnames:
-                    full = os.path.join(root, fn)
-                    rel = os.path.relpath(full, BASE_DIR).replace(os.sep, "/")
-                    zf.write(full, rel)
-                    files.append(rel)
-        zf.writestr("MANIFEST.json", json.dumps({
-            "version": version, "title": title, "type": change_type,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "files": len(files)},
-            ensure_ascii=False, indent=2))
-    try:
-        os.remove(tmp_db)
-    except OSError:
-        pass
-    db().execute("INSERT INTO dev_history(version, title, description, change_type, files_changed, "
-                 "db_changes, backup_path, created_by) VALUES(?,?,?,?,?,?,?,?)",
-                 (version, title[:160], (description or "")[:2000], change_type,
-                  json.dumps(files_changed or files, ensure_ascii=False)[:4000],
-                  (db_changes or "")[:500], zip_path, created_by))
-    db().commit()
-    _dev_prune(50)
-    try:
-        threading.Thread(target=_send_backup_to_telegram, args=(zip_path,), daemon=True).start()
-    except Exception as e:
-        log.warning("[DEV] telegram thread: %s", e)
-    log.info("[DEV] سُجلت النسخة %s: %s", version, title)
-    return version
-
-
-def _pb_validate_slug_free(slug, pid):
-    return db().execute("SELECT id FROM custom_pages WHERE slug=? AND id IS NOT ?",
-                        (slug, pid)).fetchone() is None
-
-
-# ---------- الصفحات المخصصة: عرض عام ----------
-@app.route("/p/<slug>")
-def custom_page_view(slug):
-    row = db().execute("SELECT * FROM custom_pages WHERE slug=? AND is_active=1", (slug,)).fetchone()
-    if not row:
-        abort(404)
-    body = ('<div class="container" style="max-width:820px"><div class="card pb-article">'
-            '<h1 class="pb-h1">' + esc(row["title"]) + '</h1>' +
-            sanitize_html_public(row["content_html"]) + '</div></div>')
-    return page("custom_page", body=body)
-
-
-@app.route("/links")
-def links_page():
-    u = current_user()
-    links = _pb_visible(u, "links_page")
-    grid = "".join(_pb_link_card(r) for r in links) or (
-        '<div class="card" style="text-align:center;color:var(--muted)">لا توجد روابط حالياً.</div>')
-    body = ('<div class="container" style="max-width:900px"><div class="section-title">الروابط</div>'
-            '<div class="pb-grid">' + grid + '</div></div>')
-    return page("links_page", body=body)
-
-
-# ---------- إدارة الصفحات (أدمن) ----------
-_PB_INPUT = ('width:100%;background:var(--bg2);color:var(--text);border:1px solid var(--border);'
-             'border-radius:12px;padding:12px;font-size:14px;box-sizing:border-box;font-family:inherit')
-
-
-def _pb_page_form(row=None):
-    title = esc(row["title"]) if row else ""
-    slug = esc(row["slug"]) if row else ""
-    meta = esc(row["meta_description"]) if row and row["meta_description"] else ""
-    checked = " checked" if (row is None or row["is_active"]) else ""
-    seed = esc(row["content_html"]) if row else ""
-    action = ("/admin/pages/%d/edit" % row["id"]) if row else "/admin/pages/new"
-    return f'''
-<div class="container" style="max-width:900px">
-  <div class="section-title">{"تعديل صفحة" if row else "صفحة جديدة"}</div>
-  <a href="/admin/pages" class="btn btn-ghost btn-sm" style="margin-bottom:16px">رجوع للصفحات</a>
-  <form method="POST" action="{action}" id="pbPageForm" class="card" style="padding:18px">
-    <div style="margin-bottom:12px"><label class="pb-label">العنوان</label>
-      <input name="title" required value="{title}" style="{_PB_INPUT}" oninput="pbAutoSlug(this.value)"></div>
-    <div style="margin-bottom:12px"><label class="pb-label">الرابط (slug) - يظهر كـ /p/الرابط</label>
-      <input name="slug" id="pbSlug" dir="ltr" value="{slug}" placeholder="new-feature" style="{_PB_INPUT}"></div>
-    <div style="margin-bottom:12px"><label class="pb-label">وصف قصير (اختياري)</label>
-      <input name="meta_description" value="{meta}" style="{_PB_INPUT}"></div>
-    <div style="margin-bottom:12px"><label class="pb-label">المحتوى</label>
-      <div class="pb-toolbar">
-        <button type="button" class="pb-tb" onclick="pbCmd('bold')" title="عريض">{ico("edit", 16)}<b>B</b></button>
-        <button type="button" class="pb-tb" onclick="pbCmd('italic')" title="مائل"><i>I</i></button>
-        <button type="button" class="pb-tb" onclick="pbCmd('underline')" title="تسطير"><u>U</u></button>
-        <button type="button" class="pb-tb" onclick="pbLink()" title="رابط">{ico("globe", 16)}</button>
-        <button type="button" class="pb-tb" onclick="pbImage()" title="صورة">{ico("file", 16)}</button>
-        <button type="button" class="pb-tb" onclick="pbToggleHtml()" title="عرض HTML">{ico("list", 16)}</button>
-        <button type="button" class="pb-tb" onclick="pbPreview()" title="معاينة">{ico("eye", 16)}</button>
-      </div>
-      <div id="pbEditor" class="pb-editor" contenteditable="true"></div>
-      <textarea id="pbHtml" class="pb-html" dir="ltr" spellcheck="false" style="display:none"></textarea>
-      <textarea id="pbSeed" hidden>{seed}</textarea>
-      <input type="hidden" name="content_html" id="pbContent">
-    </div>
-    <label class="pb-check"><input type="checkbox" name="is_active"{checked}> الصفحة نشطة (ظاهرة للزوار)</label>
-    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
-      <button class="btn" type="submit" onclick="pbSync()">حفظ</button>
-      <a class="btn btn-ghost" href="/admin/pages">إلغاء</a>
-    </div>
-  </form>
-</div>
-<div id="pbModal" class="pb-modal" onclick="if(event.target===this)pbCloseModal()">
-  <div class="pb-modal-box">
-    <div class="pb-row"><b>معاينة</b><button type="button" class="btn btn-sm btn-ghost" onclick="pbCloseModal()">إغلاق</button></div>
-    <iframe id="pbFrame" sandbox="" referrerpolicy="no-referrer" style="width:100%;height:70vh;border:0;border-radius:12px;background:#0b0b1a"></iframe>
-  </div>
-</div>
-<script>
-(function(){{
-  var ed=document.getElementById('pbEditor'), seed=document.getElementById('pbSeed');
-  ed.innerHTML=seed.value;
-}})();
-function pbAutoSlug(t){{
-  var s=document.getElementById('pbSlug'); if(s.value) return;
-  s.value=(t||'').toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
-}}
-function pbCmd(c){{ document.getElementById('pbEditor').focus(); document.execCommand(c,false,null); }}
-function pbLink(){{ var u=prompt('الرابط (http أو /مسار)'); if(u) {{ document.getElementById('pbEditor').focus(); document.execCommand('createLink',false,u); }} }}
-function pbImage(){{ var u=prompt('رابط الصورة (http أو /static/...)'); if(u) {{ document.getElementById('pbEditor').focus(); document.execCommand('insertImage',false,u); }} }}
-function pbToggleHtml(){{
-  var ed=document.getElementById('pbEditor'), h=document.getElementById('pbHtml');
-  if(h.style.display==='none'){{ h.value=ed.innerHTML; h.style.display='block'; ed.style.display='none'; }}
-  else {{ ed.innerHTML=h.value; h.style.display='none'; ed.style.display='block'; }}
-}}
-function pbSync(){{
-  var h=document.getElementById('pbHtml');
-  var v=(h.style.display==='block')? h.value : document.getElementById('pbEditor').innerHTML;
-  document.getElementById('pbContent').value=v;
-}}
-function pbPreview(){{
-  pbSync();
-  var fd=new FormData(document.getElementById('pbPageForm'));
-  fetch('/admin/pages/preview',{{method:'POST',body:fd,credentials:'same-origin'}})
-    .then(function(r){{return r.text();}})
-    .then(function(t){{ document.getElementById('pbFrame').srcdoc=t; document.getElementById('pbModal').style.display='flex'; }});
-}}
-function pbCloseModal(){{ document.getElementById('pbModal').style.display='none'; }}
-</script>'''
-
-
-@app.route("/admin/pages")
-@admin_required
-def admin_pages_list():
-    rows = db().execute("SELECT * FROM custom_pages ORDER BY id DESC").fetchall()
-    cards = ""
-    for r in rows:
-        ok = bool(r["is_active"])
-        cards += ('<div class="card pb-admin-card">'
-                  '<div class="pb-row"><b>' + esc(r["title"]) + '</b>'
-                  '<span class="pb-status ' + ("ok" if ok else "off") + '">' + ("نشطة" if ok else "معطلة") + '</span></div>'
-                  '<div class="pb-meta" dir="ltr">/p/' + esc(r["slug"]) + '</div>'
-                  '<div class="pb-meta">تاريخ الإنشاء: ' + esc(r["created_at"]) + '</div>'
-                  '<div class="pb-actions">'
-                  '<a class="btn btn-sm btn-ghost" href="/p/' + esc(r["slug"]) + '" target="_blank" rel="noopener">معاينة</a>'
-                  '<a class="btn btn-sm" href="/admin/pages/' + str(r["id"]) + '/edit">تعديل</a>'
-                  '<form method="POST" action="/admin/pages/' + str(r["id"]) + '/delete" '
-                  'onsubmit="return confirm(\'حذف هذه الصفحة؟\')">'
-                  '<button class="btn btn-sm pb-danger" type="submit">حذف</button></form>'
-                  '</div></div>')
-    if not rows:
-        cards = '<div class="card" style="text-align:center;color:var(--muted)">لا توجد صفحات بعد.</div>'
-    body = ('<div class="container" style="max-width:900px">'
-            '<div class="section-title">الصفحات المخصصة</div>'
-            '<div class="pb-top"><a href="/admin" class="btn btn-ghost btn-sm">رجوع</a>'
-            '<a href="/admin/pages/new" class="btn btn-sm">صفحة جديدة</a>'
-            '<a href="/admin/links" class="btn btn-ghost btn-sm">الأزرار والروابط</a></div>'
-            '<div class="pb-list">' + cards + '</div></div>')
-    return page("admin_pages", body=body)
-
-
-def _pb_save_page(pid):
-    title = (request.form.get("title") or "").strip()[:160]
-    slug = slugify((request.form.get("slug") or "").strip() or title)
-    meta = (request.form.get("meta_description") or "").strip()[:300]
-    content = request.form.get("content_html") or ""
-    active = 1 if request.form.get("is_active") == "on" else 0
-    back = "/admin/pages/new" if pid is None else "/admin/pages/%d/edit" % pid
-    if not title:
-        flash("العنوان مطلوب.", "error")
-        return redirect(back)
-    if not content.strip():
-        flash("المحتوى فارغ بعد التنظيف الأمني.", "error")
-        return redirect(back)
-    if not _pb_validate_slug_free(slug, pid):
-        flash("هذا الرابط (slug) مستخدم بالفعل، اختر غيره.", "error")
-        return redirect(back)
-    if pid is None:
-        db().execute("INSERT INTO custom_pages(slug, title, content_html, meta_description, is_active, "
-                     "created_by, updated_at) VALUES(?,?,?,?,?,?,datetime('now'))",
-                     (slug, title, content, meta, active, session.get("user_id")))
-        action, ctype = "إنشاء صفحة", "feature"
-    else:
-        db().execute("UPDATE custom_pages SET slug=?, title=?, content_html=?, meta_description=?, "
-                     "is_active=?, updated_at=datetime('now') WHERE id=?",
-                     (slug, title, content, meta, active, pid))
-        action, ctype = "تعديل صفحة", "update"
-    db().commit()
-    log_dev_change("%s: %s" % (action, title),
-                   "الرابط: /p/%s - الحالة: %s" % (slug, "نشطة" if active else "معطلة"),
-                   change_type=ctype, db_changes="custom_pages")
-    flash("تم الحفظ بنجاح.", "success")
-    return redirect(url_for("admin_pages_list"))
-
-
-@app.route("/admin/pages/new", methods=["GET", "POST"])
-@admin_required
-@register_feature("الصفحات المخصصة", "custom_pages")
-def admin_page_new():
-    if request.method == "POST":
-        return _pb_save_page(None)
-    return page("admin_page_form", body=_pb_page_form(None))
-
-
-@app.route("/admin/pages/<int:pid>/edit", methods=["GET", "POST"])
-@admin_required
-def admin_page_edit(pid):
-    row = db().execute("SELECT * FROM custom_pages WHERE id=?", (pid,)).fetchone()
-    if not row:
-        abort(404)
-    if request.method == "POST":
-        return _pb_save_page(pid)
-    return page("admin_page_form", body=_pb_page_form(row))
-
-
-@app.route("/admin/pages/<int:pid>/delete", methods=["POST"])
-@admin_required
-def admin_page_delete(pid):
-    row = db().execute("SELECT * FROM custom_pages WHERE id=?", (pid,)).fetchone()
-    if not row:
-        abort(404)
-    db().execute("DELETE FROM custom_pages WHERE id=?", (pid,))
-    db().commit()
-    log_dev_change("حذف صفحة: " + row["title"], "الرابط كان: /p/" + row["slug"],
-                   change_type="update", db_changes="custom_pages")
-    flash("تم حذف الصفحة.", "success")
-    return redirect(url_for("admin_pages_list"))
-
-
-@app.route("/admin/pages/preview", methods=["POST"])
-@admin_required
-def admin_page_preview():
-    body = request.form.get("content_html") or ""
-    title = esc(request.form.get("title") or "")
-    doc = ('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="utf-8">'
-           '<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">'
-           '<style>body{font-family:Cairo,sans-serif;background:#0b0b1a;color:#e8e8f5;margin:0;padding:18px;line-height:1.8}'
-           'a{color:#818cf8}img{max-width:100%;height:auto;border-radius:12px}h1,h2,h3{color:#fff}</style>'
-           '</head><body><h1>' + title + '</h1>' + body + '</body></html>')
-    resp = Response(doc, mimetype="text/html")
-    resp.headers["Content-Security-Policy"] = ("default-src 'none'; img-src https: data: /static/; "
-                                               "style-src 'unsafe-inline' https://fonts.googleapis.com; "
-                                               "font-src https://fonts.gstatic.com")
-    return resp
-
-
-# ---------- إدارة الأزرار (أدمن) ----------
-def _pb_link_form(row=None):
-    pages = db().execute("SELECT slug, title FROM custom_pages ORDER BY id DESC").fetchall()
-    opts = '<option value="">- اختر صفحة -</option>' + "".join(
-        '<option value="/p/%s">%s</option>' % (esc(p["slug"]), esc(p["title"])) for p in pages)
-    icon_opts = "".join('<option value="%s"%s>%s</option>' % (
-        k, " selected" if row and row["icon_name"] == k else "", k) for k in ICONS.keys())
-    pos_opts = "".join('<option value="%s"%s>%s</option>' % (
-        p, " selected" if row and row["position"] == p else "", lbl) for p, lbl in (
-        ("block", "لوحة المستخدم - بلوك مخصص"), ("navbar", "الشريط العلوي"), ("links_page", "صفحة الروابط")))
-    tgt_opts = "".join('<option value="%s"%s>%s</option>' % (
-        t, " selected" if row and row["target_users"] == t else "", lbl) for t, lbl in (
-        ("all", "الجميع"), ("user", "المستخدمون فقط"), ("admin", "الأدمن فقط")))
-    action = ("/admin/links/%d/edit" % row["id"]) if row else "/admin/links/new"
-    v = lambda k, d="": esc(row[k]) if row and row[k] is not None else d  # noqa: E731
-    active = " checked" if (row is None or row["is_active"]) else ""
-    return f'''
-<div class="container" style="max-width:700px">
-  <div class="section-title">{"تعديل زر" if row else "زر جديد"}</div>
-  <a href="/admin/links" class="btn btn-ghost btn-sm" style="margin-bottom:16px">رجوع للأزرار</a>
-  <form method="POST" action="{action}" class="card" style="padding:18px">
-    <div style="margin-bottom:12px"><label class="pb-label">العنوان</label>
-      <input name="title" required value="{v("title")}" style="{_PB_INPUT}"></div>
-    <div style="margin-bottom:12px"><label class="pb-label">ربط بصفحة مخصصة (اختياري)</label>
-      <select style="{_PB_INPUT}" onchange="if(this.value)document.getElementById('pbUrl').value=this.value">{opts}</select></div>
-    <div style="margin-bottom:12px"><label class="pb-label">الرابط</label>
-      <input id="pbUrl" name="url" dir="ltr" required value="{v("url")}" placeholder="/store أو https://..." style="{_PB_INPUT}"></div>
-    <div class="pb-grid2">
-      <div><label class="pb-label">الأيقونة</label><select name="icon_name" style="{_PB_INPUT}">{icon_opts}</select></div>
-      <div><label class="pb-label">اللون</label><input type="color" name="color" value="{v("color", "#6366f1")}" style="{_PB_INPUT};height:46px;padding:6px"></div>
-      <div><label class="pb-label">المكان</label><select name="position" style="{_PB_INPUT}">{pos_opts}</select></div>
-      <div><label class="pb-label">يظهر لـ</label><select name="target_users" style="{_PB_INPUT}">{tgt_opts}</select></div>
-      <div><label class="pb-label">الترتيب</label><input type="number" name="sort_order" value="{v("sort_order", "0")}" style="{_PB_INPUT}"></div>
-    </div>
-    <label class="pb-check" style="margin-top:14px"><input type="checkbox" name="is_active"{active}> الزر نشط</label>
-    <div style="display:flex;gap:10px;margin-top:16px"><button class="btn" type="submit">حفظ</button>
-      <a class="btn btn-ghost" href="/admin/links">إلغاء</a></div>
-  </form>
-</div>'''
-
-
-@app.route("/admin/links")
-@admin_required
-def admin_links_list():
-    rows = db().execute("SELECT * FROM custom_links ORDER BY position, sort_order, id").fetchall()
-    cards = ""
-    for r in rows:
-        ok = bool(r["is_active"])
-        cards += ('<div class="card pb-admin-card">'
-                  '<div class="pb-row"><span class="pb-link-title">' + _pb_icon(r["icon_name"], 18) +
-                  '<b>' + esc(r["title"]) + '</b></span>'
-                  '<span class="pb-status ' + ("ok" if ok else "off") + '">' + ("نشط" if ok else "معطل") + '</span></div>'
-                  '<div class="pb-meta" dir="ltr">' + esc(r["url"]) + '</div>'
-                  '<div class="pb-meta">المكان: ' + esc(r["position"]) + ' · الجمهور: ' + esc(r["target_users"]) +
-                  ' · الترتيب: ' + str(r["sort_order"]) + '</div>'
-                  '<div class="pb-actions">'
-                  '<a class="btn btn-sm" href="/admin/links/' + str(r["id"]) + '/edit">تعديل</a>'
-                  '<form method="POST" action="/admin/links/' + str(r["id"]) + '/delete" '
-                  'onsubmit="return confirm(\'حذف هذا الزر؟\')">'
-                  '<button class="btn btn-sm pb-danger" type="submit">حذف</button></form></div></div>')
-    if not rows:
-        cards = '<div class="card" style="text-align:center;color:var(--muted)">لا توجد أزرار بعد.</div>'
-    body = ('<div class="container" style="max-width:900px">'
-            '<div class="section-title">الأزرار والروابط</div>'
-            '<div class="pb-top"><a href="/admin" class="btn btn-ghost btn-sm">رجوع</a>'
-            '<a href="/admin/links/new" class="btn btn-sm">زر جديد</a>'
-            '<a href="/admin/pages" class="btn btn-ghost btn-sm">الصفحات</a></div>'
-            '<div class="pb-list">' + cards + '</div></div>')
-    return page("admin_links", body=body)
-
-
-def _pb_save_link(lid):
-    title = (request.form.get("title") or "").strip()[:120]
-    url_raw = (request.form.get("url") or "").strip()
-    # أي مخطط آخر غير http/https (مثل javascript: أو data:) يُرفض صراحة
-    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:", url_raw) and not url_raw.lower().startswith(("http://", "https://")):
-        url_raw = "!invalid"
-    elif url_raw and not url_raw.startswith(("/", "http", "#")):
-        url_raw = "/" + url_raw.lstrip("/")
-    url = _pb_safe_url(url_raw)
-    icon = request.form.get("icon_name", "link")
-    if icon not in ICONS:
-        icon = "globe"
-    color = _pb_color(request.form.get("color"))
-    position = request.form.get("position", "dashboard")
-    if position not in PB_POSITIONS:
-        position = "dashboard"
-    target = request.form.get("target_users", "all")
-    if target not in PB_TARGETS:
-        target = "all"
-    try:
-        sort_order = int(request.form.get("sort_order", "0") or 0)
-    except ValueError:
-        sort_order = 0
-    active = 1 if request.form.get("is_active") == "on" else 0
-    back = "/admin/links/new" if lid is None else "/admin/links/%d/edit" % lid
-    if not title or not url:
-        flash("العنوان والرابط مطلوبان (رابط صحيح: /مسار أو https://...).", "error")
-        return redirect(back)
-    if lid is None:
-        db().execute("INSERT INTO custom_links(title, url, icon_name, color, position, target_users, "
-                     "is_active, sort_order) VALUES(?,?,?,?,?,?,?,?)",
-                     (title, url, icon, color, position, target, active, sort_order))
-        action, ctype = "إضافة زر", "feature"
-    else:
-        db().execute("UPDATE custom_links SET title=?, url=?, icon_name=?, color=?, position=?, "
-                     "target_users=?, is_active=?, sort_order=? WHERE id=?",
-                     (title, url, icon, color, position, target, active, sort_order, lid))
-        action, ctype = "تعديل زر", "update"
-    db().commit()
-    _lid = lid if lid is not None else db().execute("SELECT last_insert_rowid()").fetchone()[0]
-    _pb_sync_block(_lid, position, active, sort_order)
-    log_dev_change("%s: %s" % (action, title), "المكان: %s - الجمهور: %s - الرابط: %s" % (
-        position, target, url), change_type=ctype, db_changes="custom_links")
-    flash("تم حفظ الزر.", "success")
-    return redirect(url_for("admin_links_list"))
-
-
-@app.route("/admin/links/new", methods=["GET", "POST"])
-@admin_required
-@register_feature("الأزرار والروابط", "custom_links")
-def admin_link_new():
-    if request.method == "POST":
-        return _pb_save_link(None)
-    return page("admin_link_form", body=_pb_link_form(None))
-
-
-@app.route("/admin/links/<int:lid>/edit", methods=["GET", "POST"])
-@admin_required
-def admin_link_edit(lid):
-    row = db().execute("SELECT * FROM custom_links WHERE id=?", (lid,)).fetchone()
-    if not row:
-        abort(404)
-    if request.method == "POST":
-        return _pb_save_link(lid)
-    return page("admin_link_form", body=_pb_link_form(row))
-
-
-@app.route("/admin/links/<int:lid>/delete", methods=["POST"])
-@admin_required
-def admin_link_delete(lid):
-    row = db().execute("SELECT * FROM custom_links WHERE id=?", (lid,)).fetchone()
-    if not row:
-        abort(404)
-    db().execute("DELETE FROM custom_links WHERE id=?", (lid,))
-    db().commit()
-    log_dev_change("حذف زر: " + row["title"], "كان الرابط: " + row["url"], change_type="update",
-                   db_changes="custom_links")
-    flash("تم حذف الزر.", "success")
-    return redirect(url_for("admin_links_list"))
-
-
-# ---------- تاريخ التطوير (أدمن) ----------
-@app.route("/admin/dev-history")
-@admin_required
-@register_feature("تاريخ التطوير", "dev_history")
-def admin_dev_history():
-    t = request.args.get("type", "").strip()
-    q = request.args.get("q", "").strip()
-    sql = "SELECT * FROM dev_history WHERE 1=1"
-    params = []
-    if t in DEV_TYPES:
-        sql += " AND change_type=?"
-        params.append(t)
-    if q:
-        sql += " AND (title LIKE ? OR description LIKE ? OR version LIKE ?)"
-        params += ["%" + q + "%"] * 3
-    sql += " ORDER BY id DESC LIMIT 200"
-    rows = db().execute(sql, params).fetchall()
-    type_opts = '<option value="">كل الأنواع</option>' + "".join(
-        '<option value="%s"%s>%s</option>' % (k, " selected" if k == t else "", lbl)
-        for k, (lbl, _c) in DEV_TYPES.items())
-    items = ""
-    for r in rows:
-        lbl, color = DEV_TYPES.get(r["change_type"], DEV_TYPES["update"])
-        exists = bool(r["backup_path"]) and os.path.exists(r["backup_path"])
-        dl = ('<a class="btn btn-sm btn-ghost" href="/admin/dev-history/%d/download">تحميل</a>' % r["id"]
-              if exists else '<span class="pb-meta">النسخة غير متوفرة</span>')
-        rs = ('<form method="POST" action="/admin/dev-history/%d/restore" '
-              'onsubmit="return pbConfirmRestore(this)" style="margin:0">'
-              '<input type="hidden" name="confirm" value="yes">'
-              '<button class="btn btn-sm" type="submit">استعادة هذه النسخة</button></form>' % r["id"]
-              if exists else "")
-        items += ('<div class="dh-item"><span class="dh-dot" style="background:%s"></span>'
-                  '<div class="card dh-card">'
-                  '<div class="pb-row"><span class="dh-ver" dir="ltr">%s</span>'
-                  '<span class="dh-type" style="color:%s;border-color:%s">%s</span></div>'
-                  '<div class="dh-title">%s</div>'
-                  '<div class="dh-desc">%s</div>'
-                  '<div class="pb-meta">%s%s</div>'
-                  '<div class="pb-actions">%s%s</div></div></div>') % (
-            color, esc(r["version"]), color, color, esc(lbl), esc(r["title"]),
-            esc(r["description"] or ""), esc(r["created_at"]),
-            (" · " + esc(r["db_changes"])) if r["db_changes"] else "", dl, rs)
-    if not rows:
-        items = '<div class="card" style="text-align:center;color:var(--muted)">لا توجد نسخ مسجلة.</div>'
-    body = ('<div class="container" style="max-width:820px">'
-            '<div class="section-title">تاريخ التطوير</div>'
-            '<div class="pb-top"><a href="/admin" class="btn btn-ghost btn-sm">رجوع</a>'
-            '<a href="/admin/dev-history/new" class="btn btn-sm">تسجيل نسخة جديدة</a></div>'
-            '<form method="GET" class="card pb-filter">'
-            '<input name="q" value="' + esc(q) + '" placeholder="بحث بالعنوان أو الوصف أو الإصدار" style="' + _PB_INPUT + '">'
-            '<select name="type" style="' + _PB_INPUT + '">' + type_opts + '</select>'
-            '<button class="btn btn-sm" type="submit">بحث</button></form>'
-            '<div class="dh-timeline">' + items + '</div></div>')
-    return page("admin_dev_history", body=body)
-
-
-@app.route("/admin/dev-history/new", methods=["GET", "POST"])
-@admin_required
-def admin_dev_new():
-    if request.method == "POST":
-        title = (request.form.get("title") or "").strip()[:160]
-        desc = (request.form.get("description") or "").strip()[:2000]
-        ctype = request.form.get("change_type", "update")
-        if not title:
-            flash("العنوان مطلوب.", "error")
-            return redirect(url_for("admin_dev_new"))
-        ver = log_dev_change(title, desc, change_type=ctype)
-        flash("تم تسجيل النسخة " + ver + ".", "success")
-        return redirect(url_for("admin_dev_history"))
-    type_opts = "".join('<option value="%s">%s</option>' % (k, lbl) for k, (lbl, _c) in DEV_TYPES.items())
-    body = ('<div class="container" style="max-width:640px"><div class="section-title">تسجيل نسخة جديدة</div>'
-            '<a href="/admin/dev-history" class="btn btn-ghost btn-sm" style="margin-bottom:16px">رجوع</a>'
-            '<form method="POST" class="card" style="padding:18px">'
-            '<div style="margin-bottom:12px"><label class="pb-label">العنوان</label>'
-            '<input name="title" required style="' + _PB_INPUT + '"></div>'
-            '<div style="margin-bottom:12px"><label class="pb-label">الوصف</label>'
-            '<textarea name="description" rows="5" style="' + _PB_INPUT + '"></textarea></div>'
-            '<div style="margin-bottom:12px"><label class="pb-label">النوع</label>'
-            '<select name="change_type" style="' + _PB_INPUT + '">' + type_opts + '</select></div>'
-            '<button class="btn" type="submit">حفظ وتسجيل</button></form></div>')
-    return page("admin_dev_new", body=body)
-
-
-@app.route("/admin/dev-history/<int:hid>/download")
-@admin_required
-def admin_dev_download(hid):
-    row = db().execute("SELECT * FROM dev_history WHERE id=?", (hid,)).fetchone()
-    if not row or not row["backup_path"] or not os.path.exists(row["backup_path"]):
-        abort(404)
-    from flask import send_file
-    return send_file(row["backup_path"], as_attachment=True,
-                     download_name=os.path.basename(row["backup_path"]))
-
-
-@app.route("/admin/dev-history/<int:hid>/restore", methods=["POST"])
-@admin_required
-def admin_dev_restore(hid):
-    import zipfile
-    import shutil
-    import sys
-    import tempfile
-    if request.form.get("confirm") != "yes":
-        flash("لم يتم التأكيد، لم تُستعد أي نسخة.", "error")
-        return redirect(url_for("admin_dev_history"))
-    row = db().execute("SELECT * FROM dev_history WHERE id=?", (hid,)).fetchone()
-    if not row or not row["backup_path"] or not os.path.exists(row["backup_path"]):
-        abort(404)
-    zip_path = row["backup_path"]
-    # نسخة أمان من الوضع الحالي قبل أي شيء
-    ok_safe, safe_path = _create_zip_backup_internal()
-    if not ok_safe:
-        flash("فشلت نسخة الأمان قبل الاستعادة، أُلغيت العملية: " + str(safe_path), "error")
-        return redirect(url_for("admin_dev_history"))
-    tmp = tempfile.mkdtemp(dir=BACKUP_DIR)
-    restored_web = False
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            names = zf.namelist()
-            for n in names:
-                if n.startswith("/") or ".." in n.replace("\\", "/").split("/"):
-                    raise ValueError("مسار غير آمن داخل النسخة: " + n)
-            zf.extract("matari.db", tmp)
-            if "web.py" in names:
-                zf.extract("web.py", tmp)
-                restored_web = True
-            static_files = [n for n in names if n.startswith("static/") and not n.endswith("/")]
-            for n in static_files:
-                zf.extract(n, tmp)
-        # 1) قاعدة البيانات عبر Backup API (آمن أثناء التشغيل)
-        src = sqlite3.connect(os.path.join(tmp, "matari.db"))
-        dst = sqlite3.connect(DB_PATH, timeout=30)
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-            src.close()
-        # 2) الملفات الثابتة
-        for n in static_files:
-            target = os.path.join(BASE_DIR, n)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copy2(os.path.join(tmp, n), target)
-        # 3) web.py
-        if restored_web:
-            shutil.copy2(os.path.join(tmp, "web.py"), os.path.join(BASE_DIR, "web.py"))
-    except Exception as e:
-        log.exception("[DEV] restore failed")
-        flash("فشلت الاستعادة: " + str(e) + ". نسخة الأمان محفوظة: " + os.path.basename(safe_path), "error")
-        return redirect(url_for("admin_dev_history"))
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    # 4) إصلاح المخطط بعد الاستعادة
-    try:
-        auto_fix_db()
-        self_heal_schema()
-    except Exception:
-        log.exception("[DEV] post-restore heal")
-    try:
-        audit("dev_restore", "version=%s safe=%s" % (row["version"], os.path.basename(safe_path)))
-        log_dev_change("استعادة النسخة " + row["version"], "تمت الاستعادة من النسخة " + row["version"],
-                       change_type="hotfix", db_changes="restore")
-    except Exception:
-        log.exception("[DEV] log after restore")
-    if restored_web and not os.environ.get("RENDER"):
-        def _restart():
-            time.sleep(2)
-            os.execl(sys.executable, sys.executable, os.path.join(BASE_DIR, "web.py"))
-        threading.Thread(target=_restart, daemon=True).start()
-        flash("تمت الاستعادة، وجاري إعادة تشغيل السيرفر.", "success")
-    elif restored_web:
-        flash("تمت الاستعادة. أعد تشغيل الخدمة من لوحة Render لتفعيل web.py.", "success")
-    else:
-        flash("تمت استعادة قاعدة البيانات والملفات الثابتة.", "success")
-    return redirect(url_for("admin_dev_history"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ---------- تحسين السلاسة (CSS + JS) ----------
 SMOOTH_CSS = """
+.back-bar { display:flex; justify-content:flex-start; margin:10px 16px 2px; }
+.back-pill { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:12px;
+  text-decoration:none; color:var(--text); font-size:12px; font-weight:800;
+  background: var(--card); border:1px solid var(--border); transition: transform .15s ease, background .2s ease; }
+.back-pill svg { color: var(--primary2); flex-shrink:0; }
+.back-pill:hover { transform: translate3d(2px,0,0); background: var(--card2); }
+.back-pill:active { transform: scale(.97); }
+@media (max-width:600px) { .back-bar { margin:8px 12px 0; } }
+
 @view-transition { navigation: auto; }
 ::view-transition-old(root), ::view-transition-new(root) {
   animation-duration: .22s; animation-timing-function: cubic-bezier(.2,.7,.2,1);
@@ -12113,64 +11516,9 @@ body.mt-ready .container { animation: mtPageIn .28s cubic-bezier(.2,.7,.2,1) bot
 html { -webkit-tap-highlight-color: transparent; scroll-behavior: smooth; }
 a, button, .btn { -webkit-tap-highlight-color: transparent; }
 img { content-visibility: auto; }
-.pb-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap:12px; }
-.pb-grid2 { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
-.pb-card { display:flex; flex-direction:column; align-items:center; gap:10px; padding:18px 12px;
-  border-radius:18px; text-decoration:none; color:var(--text); text-align:center;
-  background: linear-gradient(145deg, var(--card), var(--card2)); border:1px solid var(--border);
-  border-top:3px solid var(--pb-c, #6366f1); box-shadow:0 6px 18px rgba(0,0,0,.2);
-  transform: translate3d(0,0,0); transition: transform .2s ease, box-shadow .2s ease; }
-.pb-card:hover, .pb-card:focus-visible { transform: translate3d(0,-3px,0); box-shadow:0 12px 26px rgba(0,0,0,.3); }
-.pb-card:active { transform: translate3d(0,0,0) scale(.98); }
-.pb-ico { width:44px; height:44px; border-radius:14px; display:flex; align-items:center; justify-content:center;
-  background: color-mix(in srgb, var(--pb-c, #6366f1) 18%, transparent); color: var(--pb-c, #6366f1); }
-.pb-title { font-weight:800; font-size:14px; }
-.pb-nav-wrap { display:flex; align-items:center; gap:6px; }
-.pb-nav { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:12px; text-decoration:none;
-  color:var(--text); background:var(--card); border:1px solid var(--border); font-size:12px; font-weight:700;
-  transition: transform .15s ease, background .15s ease; }
-.pb-nav:hover { transform: translate3d(0,-1px,0); }
-@media (max-width:600px) { .pb-nav span { display:none; } }
-.pb-top { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
-.pb-list { display:grid; gap:12px; }
-.pb-admin-card { padding:14px; }
-.pb-row { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
-.pb-meta { font-size:12px; color:var(--muted); margin-top:6px; word-break:break-all; }
-.pb-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
-.pb-status { font-size:11px; font-weight:800; padding:3px 10px; border-radius:20px; }
-.pb-status.ok { background:rgba(16,185,129,.15); color:#10b981; }
-.pb-status.off { background:rgba(239,68,68,.15); color:#ef4444; }
-.pb-danger { background:rgba(239,68,68,.15); color:#ef4444; border:1px solid rgba(239,68,68,.35); }
-.pb-label { font-size:12px; color:var(--muted); font-weight:800; display:block; margin-bottom:6px; }
-.pb-check { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:700; }
-.pb-filter { display:grid; grid-template-columns: 1fr 200px auto; gap:10px; padding:14px; margin-bottom:16px; }
-@media (max-width:640px) { .pb-filter { grid-template-columns:1fr; } }
-.pb-toolbar { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
-.pb-tb { min-width:38px; height:36px; padding:0 10px; border-radius:10px; cursor:pointer; background:var(--bg2);
-  color:var(--text); border:1px solid var(--border); display:inline-flex; align-items:center; justify-content:center; gap:4px; font-family:inherit; }
-.pb-tb:hover { background:var(--card2); }
-.pb-editor { min-height:260px; background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:14px;
-  outline:none; line-height:1.9; overflow:auto; }
-.pb-html { width:100%; min-height:260px; background:var(--bg2); color:var(--text); border:1px solid var(--border);
-  border-radius:12px; padding:12px; font-family:monospace; box-sizing:border-box; }
-.pb-modal { display:none; position:fixed; inset:0; z-index:99990; background:rgba(0,0,0,.6); align-items:center;
-  justify-content:center; padding:14px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-.pb-modal-box { width:min(900px,100%); background:var(--card); border:1px solid var(--border); border-radius:18px; padding:14px; }
-.pb-article { padding:22px; line-height:1.9; }
-.pb-h1 { font-size:24px; font-weight:900; margin:0 0 14px; }
-.pb-article img { max-width:100%; height:auto; border-radius:12px; }
-.dh-timeline { position:relative; padding-right:22px; }
-.dh-timeline::before { content:""; position:absolute; right:7px; top:6px; bottom:6px; width:2px; background:var(--border); }
-.dh-item { position:relative; margin-bottom:14px; }
-.dh-dot { position:absolute; right:-22px; top:20px; width:14px; height:14px; border-radius:50%; box-shadow:0 0 0 4px var(--bg); }
-.dh-card { padding:14px; }
-.dh-ver { font-family:monospace; font-weight:900; font-size:13px; color:var(--primary2); }
-.dh-type { font-size:11px; font-weight:800; padding:3px 10px; border-radius:20px; border:1px solid; }
-.dh-title { font-weight:900; font-size:15px; margin-top:8px; }
-.dh-desc { font-size:13px; color:var(--muted); line-height:1.8; margin-top:4px; white-space:pre-wrap; }
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  body.mt-ready .container, .pb-card, .pb-nav, ::view-transition-old(root), ::view-transition-new(root) {
+html { scroll-behavior: auto; }
+body.mt-ready .container, ::view-transition-old(root), ::view-transition-new(root) {
     animation: none !important; transition: none !important; }
 }
 """
@@ -12198,539 +11546,738 @@ SMOOTH_JS = """
   function near(e){ return e.target && e.target.closest ? e.target.closest('a') : null; }
   document.addEventListener('pointerover', function(e){ prefetch(near(e)); }, {passive:true});
   document.addEventListener('touchstart', function(e){ prefetch(near(e)); }, {passive:true});
-  window.pbConfirmRestore = function(f){
-    return confirm('سيتم استبدال البيانات والملفات الحالية بهذه النسخة. نسخة أمان من الوضع الحالي ستُؤخذ أولاً. متابعة؟');
-  };
+})();
+(function(){
+  if (window.__spaBound) return;
+  window.__spaBound = true;
+  var SPA_PATHS = ['/dashboard','/deposit','/support','/referral','/vip','/profile','/my/numbers','/sell','/about','/transfer'];
+  var IDS = ['pageHead','pageMain','topNavWrap','botNavWrap'];
+  var busy = false;
+  function allowed(a){
+    if (!a || !a.href) return null;
+    var u;
+    try { u = new URL(a.href, location.href); } catch (e) { return null; }
+    if (u.origin !== location.origin || a.target || a.hasAttribute('download')) return null;
+    if (a.closest && a.closest('#storeMain')) return null;
+    if (SPA_PATHS.indexOf(u.pathname) === -1) return null;
+    if (u.pathname === location.pathname && u.search === location.search) return null;
+    return u;
+  }
+  function runScripts(root){
+    root.querySelectorAll('script').forEach(function(old){
+      var s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    });
+  }
+  function swap(html, u){
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    for (var i = 0; i < IDS.length; i++) {
+      if (!doc.getElementById(IDS[i]) || !document.getElementById(IDS[i])) return false;
+    }
+    IDS.forEach(function(id){
+      var cur = document.getElementById(id);
+      cur.innerHTML = doc.getElementById(id).innerHTML;
+      runScripts(cur);
+    });
+    if (doc.title) document.title = doc.title;
+    history.pushState({spa: true}, '', u.href);
+    window.scrollTo(0, 0);
+    return true;
+  }
+  document.addEventListener('click', function(e){
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target && e.target.closest ? e.target.closest('#pageHead a[href], #pageMain a[href], #topNavWrap a[href], #botNavWrap a[href]') : null;
+    if (!a) return;
+    var u = allowed(a);
+    if (!u) return;
+    e.preventDefault();
+    if (busy) return;
+    busy = true;
+    var main = document.getElementById('pageMain');
+    if (main) main.style.opacity = '0.5';
+    fetch(u.href, {credentials: 'same-origin'})
+      .then(function(r){ if (!r.ok || r.redirected) throw new Error('nav'); return r.text(); })
+      .then(function(html){ if (!swap(html, u)) location.href = u.href; })
+      .catch(function(){ location.href = u.href; })
+      .then(function(){
+        busy = false;
+        var m = document.getElementById('pageMain');
+        if (m) m.style.opacity = '';
+      });
+  });
+  window.addEventListener('popstate', function(){
+    if (SPA_PATHS.indexOf(location.pathname) !== -1) location.reload();
+  });
+})();
+
+(function(){
+  if (window.__backBound) return;
+  window.__backBound = true;
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a.back-pill[data-back]') : null;
+    if (!a) return;
+    e.preventDefault();
+    if (history.length > 1) { history.back(); }
+    else { location.href = a.getAttribute('href'); }
+  });
 })();
 """
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============================================================
-# تطوير: تنظيف عام للزوار + الصفحات الثابتة + بلوكات لوحة المستخدم
+# الحذف الجماعي: أكواد المراقبة، الفاوتشرات، الكوبونات، الأرقام المباعة
+# قبل كل حذف تُؤخذ نسخة احتياطية كاملة وتُرسل لتيليجرام، فلا يضيع شي.
 # ============================================================
-STATIC_PAGES = [
-    ("/about", "عن المتجر"), ("/referral", "الإحالات"), ("/vip", "VIP"),
-    ("/transfer", "التحويل"), ("/sell", "بيع الأرقام"), ("/store", "المتجر"),
-    ("/deposit", "الشحن"), ("/support", "الدعم الفني"),
-]
-DASH_BLOCK_TYPES = (("link", "زر"), ("text", "نص"), ("banner", "بانر"), ("html", "HTML مخصص"))
-DASH_COLUMNS = (("full", "عرض كامل"), ("left", "العمود الأيسر"), ("right", "العمود الأيمن"))
-
-_PB_PUBLIC_TAGS = _PB_ALLOWED_TAGS | {
-    "section", "article", "header", "footer", "nav", "main", "aside", "table", "thead",
-    "tbody", "tfoot", "tr", "td", "th", "figure", "figcaption", "sup", "sub", "mark",
-    "time", "abbr", "center"}
-_PB_PUBLIC_ATTRS = {"href", "src", "title", "alt", "width", "height", "class", "id",
-                    "style", "colspan", "rowspan"}
-_PB_CSS_BAD = re.compile(
-    r"expression\s*\(|javascript\s*:|vbscript\s*:|@import|behavior\s*:|-moz-binding|"
-    r"url\s*\(\s*['\"]?\s*(javascript|data|vbscript)\s*:", re.IGNORECASE)
+BULK_KINDS = {
+    "codes": ("سجل الأكواد", "code_logs"),
+    "vouchers": ("الفاوتشرات", "vouchers"),
+    "coupons": ("الكوبونات", "coupons"),
+    "sold": ("الأرقام المباعة", "numbers"),
+}
 
 
-class _PBPublicSanitizer(_PBHTMLParser):
-    """تنظيف للزوار: يسمح بالتنسيق (style و class و <style>) ويمنع السكربتات والأحداث والروابط الخطرة."""
+def _bulk_rows(kind):
+    """يرجع (العناصر، مفتاح الصف، عنوان العمود) لكل نوع."""
+    if kind == "codes":
+        rows = db().execute("SELECT cl.id, cl.phone, cl.code, cl.platform, cl.created_at, u.username "
+                            "FROM code_logs cl LEFT JOIN users u ON u.user_id=cl.user_id "
+                            "ORDER BY cl.id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | %s | %s | %s" % (r["created_at"], r["username"] or "-", r["phone"], r["code"]))
+                for r in rows]
+    if kind == "vouchers":
+        rows = db().execute("SELECT id, code, amount, is_used, created_at FROM vouchers "
+                            "ORDER BY id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | $%.2f | %s" % (r["code"], float(r["amount"]),
+                 "مستخدم" if r["is_used"] else "غير مستخدم")) for r in rows]
+    if kind == "coupons":
+        rows = db().execute("SELECT code, percent, max_uses, used_count FROM coupons "
+                            "ORDER BY rowid DESC LIMIT 300").fetchall()
+        return [(r["code"], "%s | خصم %s%% | استخدام %s/%s" % (r["code"], r["percent"],
+                 r["used_count"], r["max_uses"])) for r in rows]
+    if kind == "sold":
+        rows = db().execute("SELECT id, phone, country, platform, paid_price, sold_at FROM numbers "
+                            "WHERE status='sold' ORDER BY id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | %s | %s | $%.2f" % (r["phone"], r["country"], r["platform"],
+                 float(r["paid_price"] or 0))) for r in rows]
+    return []
 
+
+def _bulk_total(kind):
+    q = {"codes": "SELECT COUNT(*) c FROM code_logs",
+         "vouchers": "SELECT COUNT(*) c FROM vouchers",
+         "coupons": "SELECT COUNT(*) c FROM coupons",
+         "sold": "SELECT COUNT(*) c FROM numbers WHERE status='sold'"}[kind]
+    return db().execute(q).fetchone()["c"]
+
+
+def _bulk_snapshot(label, count):
+    """نسخة كاملة قبل الحذف (تُكتب محلياً وتُرسل لتيليجرام في الخلفية)."""
+    ok, path = _create_zip_backup_internal()
+    if ok:
+        threading.Thread(target=_send_backup_to_telegram, args=(path,), daemon=True).start()
+    return ok, path
+
+
+@app.route("/admin/bulk-delete")
+@admin_required
+def admin_bulk_delete_page():
+    kind = request.args.get("kind", "codes")
+    if kind not in BULK_KINDS:
+        kind = "codes"
+    label, _tbl = BULK_KINDS[kind]
+    tabs = ""
+    for k, (lbl, _t) in BULK_KINDS.items():
+        active = "background:var(--primary);color:#fff;" if k == kind else "background:var(--card);color:var(--text);"
+        tabs += ('<a href="/admin/bulk-delete?kind=%s" style="padding:10px 14px;border-radius:12px;'
+                 'border:1px solid var(--border);text-decoration:none;font-weight:800;font-size:13px;%s">%s</a>'
+                 % (k, active, esc(lbl)))
+    items = _bulk_rows(kind)
+    total = _bulk_total(kind)
+    rows_html = ""
+    for key, text in items:
+        rows_html += ('<label style="display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid var(--border);'
+                      'font-size:13px;word-break:break-all;cursor:pointer">'
+                      '<input type="checkbox" name="keys" value="%s" class="bulk-cb" style="width:18px;height:18px;flex-shrink:0">'
+                      '<span>%s</span></label>' % (esc(key), esc(text)))
+    if not rows_html:
+        rows_html = '<div style="padding:20px;text-align:center;color:var(--muted)">لا توجد عناصر.</div>'
+    body = ('<div class="container" style="max-width:900px">'
+            '<div class="section-title">الحذف الجماعي</div>'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' + tabs + '</div>'
+            '<div class="card" style="padding:14px;margin-bottom:12px;font-size:13px;color:var(--muted);line-height:1.8">'
+            + esc(label) + ': ' + str(total) + ' عنصر. يتم عرض آخر 300. قبل كل حذف تُؤخذ نسخة احتياطية كاملة.'
+            '</div>'
+            '<form method="POST" action="/admin/bulk-delete/' + kind + '" id="bulkForm" class="card" style="padding:0;overflow:hidden">'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--border)">'
+            '<label style="display:flex;gap:6px;align-items:center;font-weight:800;font-size:13px">'
+            '<input type="checkbox" id="bulkAll" onchange="document.querySelectorAll(\'.bulk-cb\').forEach(function(c){c.checked=this.checked}.bind(this))"> تحديد الكل</label>'
+            '<button class="btn btn-sm" type="submit" name="mode" value="selected" '
+            'onclick="return bulkConfirm(\'selected\')">حذف المحدد</button>'
+            '<button class="btn btn-sm" type="submit" name="mode" value="all" '
+            'style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.35)" '
+            'onclick="return bulkConfirm(\'all\')">حذف الكل</button>'
+            '</div>'
+            + rows_html +
+            '</form>'
+            '<div style="margin-top:14px"><a href="/admin" class="btn btn-ghost btn-sm">رجوع للوحة</a></div>'
+            '</div>'
+            '<script>function bulkConfirm(m){'
+            'var n=document.querySelectorAll(".bulk-cb:checked").length;'
+            'if(m==="selected"){ if(!n){alert("اختر عنصراً أولاً");return false;}'
+            'return confirm("حذف "+n+" عنصر؟ سيتم أخذ نسخة احتياطية أولاً."); }'
+            'return confirm("حذف كل العناصر في هذا القسم؟ سيتم أخذ نسخة احتياطية أولاً.");}'
+            '</script>')
+    return page("admin_bulk_delete", body=body)
+
+
+@app.route("/admin/bulk-delete/<kind>", methods=["POST"])
+@admin_required
+def admin_bulk_delete_run(kind):
+    if kind not in BULK_KINDS:
+        abort(404)
+    label, _tbl = BULK_KINDS[kind]
+    mode = request.form.get("mode", "selected")
+    keys = [k for k in request.form.getlist("keys") if k][:5000]
+    if mode == "selected" and not keys:
+        flash("لم تختر أي عنصر.", "error")
+        return redirect(url_for("admin_bulk_delete_page", kind=kind))
+
+    if mode == "all":
+        count = _bulk_total(kind)
+    else:
+        count = len(keys)
+
+    ok, path = _bulk_snapshot(label, count)
+    if not ok:
+        flash("فشلت النسخة الاحتياطية قبل الحذف، تم إلغاء العملية لحماية البيانات.", "error")
+        return redirect(url_for("admin_bulk_delete_page", kind=kind))
+
+    try:
+        if kind == "codes":
+            if mode == "all":
+                db().execute("DELETE FROM code_logs")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM code_logs WHERE id=?", [(i,) for i in ids])
+        elif kind == "vouchers":
+            if mode == "all":
+                db().execute("DELETE FROM vouchers")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM vouchers WHERE id=?", [(i,) for i in ids])
+        elif kind == "coupons":
+            if mode == "all":
+                db().execute("DELETE FROM coupons")
+            else:
+                codes = [k[:64] for k in keys]
+                db().executemany("DELETE FROM coupons WHERE code=?", [(c,) for c in codes])
+        elif kind == "sold":
+            if mode == "all":
+                db().execute("DELETE FROM numbers WHERE status='sold'")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM numbers WHERE id=? AND status='sold'", [(i,) for i in ids])
+        db().commit()
+    except Exception as e:
+        db().rollback()
+        log.exception("[BULK] فشل الحذف: %s", e)
+        flash("حدث خطأ أثناء الحذف: " + str(e), "error")
+        return redirect(url_for("admin_bulk_delete_page", kind=kind))
+
+    try:
+        audit("bulk_delete", "kind=%s mode=%s count=%s backup=%s" % (kind, mode, count, os.path.basename(path)))
+    except Exception:
+        pass
+    flash("تم حذف %d عنصر من %s. النسخة الاحتياطية: %s" % (count, label, os.path.basename(path)), "success")
+    return redirect(url_for("admin_bulk_delete_page", kind=kind))
+
+
+
+# ============================================================
+# الختوم (Stamps): كل رقم يقدر ياخذ ختوم متعددة، والأدمن يحدد الختوم بحرية
+# ============================================================
+_STAMP_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _stamp_chips_html(number_id):
+    rows = db().execute("SELECT s.name, s.color FROM number_stamps ns JOIN stamps s ON s.id=ns.stamp_id "
+                        "WHERE ns.number_id=? ORDER BY s.id", (number_id,)).fetchall()
+    if not rows:
+        return ""
+    chips = ""
+    for r in rows:
+        c = r["color"] if _STAMP_COLOR_RE.match(r["color"] or "") else "#f59e0b"
+        chips += ('<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:800;'
+                  'padding:3px 8px;border-radius:20px;color:%s;border:1px solid %s66;background:%s22;'
+                  'margin:2px 3px 2px 0;">%s</span>' % (c, c, c, esc(r["name"])))
+    return '<div style="display:flex;flex-wrap:wrap;margin-top:4px;">' + chips + '</div>'
+
+
+def _stamp_names_text(number_id):
+    rows = db().execute("SELECT s.name FROM number_stamps ns JOIN stamps s ON s.id=ns.stamp_id "
+                        "WHERE ns.number_id=? ORDER BY s.id", (number_id,)).fetchall()
+    return "، ".join(r["name"] for r in rows)
+
+
+@app.route("/admin/stamps/<int:sid>/delete", methods=["POST"])
+@admin_required
+def admin_stamps_delete(sid):
+    row = db().execute("SELECT name FROM stamps WHERE id=?", (sid,)).fetchone()
+    if not row:
+        abort(404)
+    db().execute("DELETE FROM number_stamps WHERE stamp_id=?", (sid,))
+    db().execute("DELETE FROM stamps WHERE id=?", (sid,))
+    db().commit()
+    audit("stamp_delete", row["name"])
+    flash("تم حذف الختم: " + row["name"], "success")
+    return redirect(url_for("admin_stamps_page"))
+
+
+@app.route("/admin/stamps/apply", methods=["POST"])
+@admin_required
+def admin_stamps_apply():
+    action = request.form.get("action", "add")
+    nums = [int(x) for x in request.form.getlist("numbers") if x.isdigit()][:5000]
+    sids = [int(x) for x in request.form.getlist("stamp_ids") if x.isdigit()][:200]
+    if not nums or not sids:
+        flash("اختر رقماً واحداً على الأقل وختماً واحداً على الأقل.", "error")
+        return redirect(url_for("admin_stamps_page"))
+    try:
+        if action == "remove":
+            db().executemany("DELETE FROM number_stamps WHERE number_id=? AND stamp_id=?",
+                             [(n, s) for n in nums for s in sids])
+            verb = "إزالة"
+        else:
+            db().executemany("INSERT OR IGNORE INTO number_stamps(number_id, stamp_id) VALUES(?,?)",
+                             [(n, s) for n in nums for s in sids])
+            verb = "إضافة"
+        db().commit()
+        audit("stamp_apply", "%s numbers=%d stamps=%s" % (action, len(nums), sids))
+        flash("تم %s الختوم لـ %d رقم." % (verb, len(nums)), "success")
+    except Exception as e:
+        db().rollback()
+        log.exception("[STAMPS] %s", e)
+        flash("حدث خطأ: " + str(e), "error")
+    return redirect(url_for("admin_stamps_page"))
+
+
+# ============================================================
+# الختوم بصيغة SVG: كل ختم له شكل ولون، والأدمن يقدر يصنع ختماً من شكل جاهز أو يلصق SVG
+# الختم الذهبي "مميز" هو ختم عادي من نفس النظام، ويظهر في مكان واحد فوق البطاقة.
+# ============================================================
+import math as _math
+from html.parser import HTMLParser as _SVGHTMLParser
+
+_STAMP_SHAPES = [("seal", "ختم دائري"), ("star", "نجمة"), ("shield", "درع"), ("crown", "تاج"), ("ribbon", "شريط")]
+_SVG_DROP_TAGS = {"script", "foreignobject", "style", "iframe", "object", "embed", "use", "image",
+                  "a", "animate", "set", "animatetransform", "animatemotion", "handler", "feimage"}
+_SVG_ALLOWED_TAGS = {"svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon", "text",
+                     "tspan", "defs", "lineargradient", "radialgradient", "stop", "clippath", "title"}
+_SVG_TAG_FIX = {"lineargradient": "linearGradient", "radialgradient": "radialGradient", "clippath": "clipPath"}
+_SVG_ATTR_FIX = {"viewbox": "viewBox", "gradientunits": "gradientUnits", "gradienttransform": "gradientTransform",
+                 "clippathunits": "clipPathUnits", "text-anchor": "text-anchor"}
+_SVG_ALLOWED_ATTRS = {"viewbox", "xmlns", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+                      "opacity", "fill-opacity", "stroke-opacity", "d", "cx", "cy", "r", "rx", "ry", "x", "y",
+                      "x1", "y1", "x2", "y2", "width", "height", "points", "transform", "font-size", "font-weight",
+                      "font-family", "text-anchor", "id", "offset", "stop-color", "stop-opacity", "fx", "fy",
+                      "gradientunits", "gradienttransform", "letter-spacing", "dx", "dy", "clip-path", "style",
+                      "class", "clippathunits", "rotate"}
+_SVG_BAD_VALUE = re.compile(r"javascript\s*:|vbscript\s*:|expression\s*\(|url\s*\(\s*['\"]?(?!#)", re.I)
+
+
+class _SVGSanitizer(_SVGHTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.out = []
         self.drop = 0
-        self.in_style = False
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
-        if tag == "style":
-            if not self.drop:
-                self.in_style = True
-                self.out.append("<style>")
+        if tag in _SVG_DROP_TAGS:
+            self.drop += 1
             return
-        if tag in _PB_DROP_TAGS:
-            if tag not in _PB_VOID_TAGS:
-                self.drop += 1
-            return
-        if self.drop or tag not in _PB_PUBLIC_TAGS:
+        if self.drop or tag not in _SVG_ALLOWED_TAGS:
             return
         parts = []
         for key, val in attrs:
-            key = (key or "").lower()
-            val = val or ""
-            if key not in _PB_PUBLIC_ATTRS or key.startswith("on"):
+            k = (key or "").lower()
+            v = val or ""
+            if k.startswith("on") or k not in _SVG_ALLOWED_ATTRS:
                 continue
-            if key in ("href", "src"):
-                url = _pb_safe_url(val)
-                if url is None or (key == "src" and not (url.startswith("http") or url.startswith("/"))):
-                    continue
-                parts.append(' %s="%s"' % (key, _html_mod.escape(url, quote=True)))
-                if key == "href" and url.lower().startswith("http"):
-                    parts.append(' target="_blank" rel="noopener noreferrer"')
-            elif key == "style":
-                if _PB_CSS_BAD.search(val):
-                    continue
-                parts.append(' style="%s"' % _html_mod.escape(val, quote=True))
-            else:
-                parts.append(' %s="%s"' % (key, _html_mod.escape(val, quote=True)))
-        self.out.append("<%s%s>" % (tag, "".join(parts)))
+            if _SVG_BAD_VALUE.search(v):
+                continue
+            parts.append(' %s="%s"' % (_SVG_ATTR_FIX.get(k, k), _html_mod.escape(v, quote=True)))
+        self.out.append("<%s%s>" % (_SVG_TAG_FIX.get(tag, tag), "".join(parts)))
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-        if tag == "style":
-            if self.in_style:
-                self.in_style = False
-                self.out.append("</style>")
-            return
-        if tag in _PB_DROP_TAGS:
-            if tag not in _PB_VOID_TAGS and self.drop:
+        if tag in _SVG_DROP_TAGS:
+            if self.drop:
                 self.drop -= 1
             return
-        if self.drop or tag not in _PB_PUBLIC_TAGS or tag in _PB_VOID_TAGS:
+        if self.drop or tag not in _SVG_ALLOWED_TAGS:
             return
-        self.out.append("</%s>" % tag)
+        self.out.append("</%s>" % _SVG_TAG_FIX.get(tag, tag))
 
     def handle_data(self, data):
-        if self.drop:
-            return
-        if self.in_style:
-            css = re.sub(r"@import[^;]*;?", "", data, flags=re.IGNORECASE)
-            css = _PB_CSS_BAD.sub("", css)
-            self.out.append(css.replace("</", "<\\/"))
-            return
-        self.out.append(_html_mod.escape(data, quote=False))
+        if not self.drop:
+            self.out.append(_html_mod.escape(data, quote=False))
 
 
-def sanitize_html_public(raw):
-    parser = _PBPublicSanitizer()
-    parser.feed(str(raw or "")[:PB_MAX_HTML * 2])
-    parser.close()
-    return "".join(parser.out)
-
-
-_CAPTURE = threading.local()
-
-# الصفحات الثابتة ومعرّف دالة العرض الخاصة بكل صفحة
-STATIC_PAGE_ENDPOINTS = {
-    "/about": "about_page", "/referral": "referral", "/vip": "vip_page",
-    "/transfer": "transfer", "/sell": "sell", "/store": "store",
-    "/deposit": "deposit", "/support": "support",
-}
-
-# نسخ الـ HTML الأصلي للصفحات الثابتة التي محتواها ثابت (لا يتغير حسب المستخدم).
-# تُملأ من الكود الفعلي للصفحة. الصفحات غير الموجودة هنا تُلتقط تلقائياً من الكود الحالي.
-STATIC_PAGE_DEFAULTS = {
-    # نسخة الأصل من الكود (صفحة ثابتة المحتوى، لا تعتمد على بيانات المستخدم)
-    "/about": '\n    <div class="container" style="max-width: 700px; padding-top: 20px;">\n      <div style="text-align: center; margin-bottom: 24px;">\n        <div style="font-size: 24px; font-weight: 900; color: var(--text); margin-bottom: 6px;">دليل استخدام الموقع</div>\n        <div style="font-size: 13px; color: var(--muted);">كل ما تحتاج معرفته عن أقسام MATARI STORE</div>\n      </div>\n    </div>\n    <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #6366f1; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #6366f115; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #6366f130;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #6366f120; color: #6366f1; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">01</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الرئيسية</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">الصفحة الرئيسية التي تعرض أحدث الأرقام المتاحة وأهم الميزات.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #818cf8; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #818cf815; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #818cf830;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #818cf820; color: #818cf8; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">02</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">المتجر</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">تصفح جميع الأرقام المتاحة للبيع مقسمة حسب المنصة (واتساب/تيليجرام) والدولة.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #10b981; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #10b98115; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #10b98130;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #10b98120; color: #10b981; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">03</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الشراء</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">اختر الرقم الذي تريده واضغط شراء ليتم خصم السعر من رصيدك فوراً.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #06b6d4; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #06b6d415; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #06b6d430;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #06b6d420; color: #06b6d4; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">04</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">حسابي</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">لوحة التحكم الخاصة بك حيث ترى رصيدك وأرقامك المشتراة وإحصائياتك.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #f59e0b; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f59e0b15; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #f59e0b30;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #f59e0b20; color: #f59e0b; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">05</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">شحن الرصيد</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">أضف رصيد لحسابك باستخدام فودافون كاش، جيب، ون كاش، بينانس، أو كود شحن.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #8b5cf6; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #8b5cf615; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #8b5cf630;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #8b5cf620; color: #8b5cf6; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">06</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">تحويل رصيد</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">أرسل رصيد لأي صديق باستخدام الآيدي الخاص به داخل الموقع.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #f97316; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f9731615; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #f9731630;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #f9731620; color: #f97316; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">07</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">مستويات VIP</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">كلما اشتريت أكثر، ترتفع رتبتك وتحصل على خصومات حصرية تلقائية.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #ec4899; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #ec489915; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #ec489930;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #ec489920; color: #ec4899; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">08</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الإحالات</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">شارك رابطك مع أصدقائك واربح مكافأة مالية عند شراء أول رقم.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #14b8a6; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #14b8a615; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #14b8a630;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #14b8a620; color: #14b8a6; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">09</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">أرقامي</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">جميع الأرقام التي اشتريتها موجودة هنا، مع إمكانية سحب الكود في أي وقت.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #ef4444; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #ef444415; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #ef444430;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #ef444420; color: #ef4444; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">10</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">سحب الكود</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">اضغط على الرقم لتدخل صفحته وتضغط زر سحب الكود ليظهر لك فوراً.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #84cc16; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #84cc1615; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #84cc1630;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#84cc16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #84cc1620; color: #84cc16; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">11</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الحماية</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">نضمن لك حماية أرقامك وعدم استرجاعها من قبل البائع الأصلي.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #a855f7; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #a855f715; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #a855f730;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #a855f720; color: #a855f7; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">12</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الدعم الفني</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">إذا واجهت أي مشكلة، افتح تذكرة جديدة وسيرد عليك فريق الدعم.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #eab308; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #eab30815; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #eab30830;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #eab30820; color: #eab308; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">13</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">المكافأة اليومية</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">احصل على مكافأة مجانية كل 24 ساعة بمجرد الضغط على زر الاستلام.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #3b82f6; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #3b82f615; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #3b82f630;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #3b82f620; color: #3b82f6; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">14</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الإشعارات</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">ستصلك إشعارات فورية عند وصول الكود أو عند إتمام أي عملية بنجاح.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #6b7280; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #6b728015; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #6b728030;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #6b728020; color: #6b7280; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">15</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">البحث</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">استخدم مربع البحث للعثور على رقم أو دولة معينة بسرعة.</div>\n          </div>\n        </div>\n        <div style="background: linear-gradient(145deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 14px; border-right: 4px solid #059669; transition: all 0.3s;">\n          <div style="width: 44px; height: 44px; border-radius: 12px; background: #05966915; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #05966930;">\n            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>\n          </div>\n          <div style="flex: 1;">\n            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">\n              <span style="background: #05966920; color: #059669; font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 20px;">16</span>\n              <div style="font-weight: 800; font-size: 15px; color: var(--text);">الأمان</div>\n            </div>\n            <div style="font-size: 13px; color: var(--muted); line-height: 1.6;">جميع بياناتك مشفرة ومحمية بأعلى معايير الأمان في الموقع.</div>\n          </div>\n        </div>\n        \n    ',
-}
-
-
-def _capture_static_body(route):
-    """يشغّل دالة عرض الصفحة الأصلية (بدون التخصيص) ويرجع جزء الـ body فقط."""
-    endpoint = STATIC_PAGE_ENDPOINTS.get(route)
-    if not endpoint or route == "/support":  # /support تنشئ تذكرة عند فتحها، لذلك لا نلتقطها
-        return ""
-    fn = app.view_functions.get(endpoint)
-    if fn is None:
-        return ""
-    _CAPTURE.on = True
-    _CAPTURE.skip = True
-    try:
-        rv = fn()
-    except Exception:
-        log.exception("[STATIC] تعذر التقاط الصفحة %s", route)
-        return ""
-    finally:
-        _CAPTURE.on = False
-        _CAPTURE.skip = False
-    return rv if isinstance(rv, str) else ""
-
-
-def _static_default(route):
-    """الأصل الذي يظهر في مربع التعديل: القاموس أولاً، ثم الالتقاط من الكود الحالي."""
-    if route in STATIC_PAGE_DEFAULTS:
-        return STATIC_PAGE_DEFAULTS[route]
-    return _capture_static_body(route)
-
-
-def _static_override(route):
-    """يرجع صفحة التخصيص إن وُجدت (للطلبات GET فقط)، وإلا None."""
-    if request.method != "GET" or getattr(_CAPTURE, "skip", False):
+def _svg_sanitize(markup):
+    """ينظف كود SVG الملصوق ويرجع نسخة آمنة، أو None إذا كان غير صالح."""
+    raw = str(markup or "").strip()[:20000]
+    if not raw:
         return None
-    try:
-        row = db().execute("SELECT custom_html FROM static_pages_overrides WHERE route=? AND is_active=1",
-                           (route,)).fetchone()
-    except sqlite3.Error:
+    p = _SVGSanitizer()
+    p.feed(raw)
+    p.close()
+    clean = "".join(p.out).strip()
+    if not clean.lower().startswith("<svg") or "</svg>" not in clean.lower():
         return None
-    if not row:
-        return None
-    return page("static_override", body=sanitize_html_public(row["custom_html"]))
+    return clean
 
 
-# ---------- معاينة الصفحة المخصصة للأدمن ----------
-@app.route("/p/preview/<slug>")
-@admin_required
-def preview_custom_page(slug):
-    row = db().execute("SELECT * FROM custom_pages WHERE slug=?", (slug,)).fetchone()
-    if not row:
-        abort(404)
-    banner = ('<div class="card" style="margin-bottom:12px;border:1px solid rgba(245,158,11,.4);'
-              'background:rgba(245,158,11,.08);display:flex;justify-content:space-between;align-items:center;'
-              'gap:10px;flex-wrap:wrap"><b style="color:#f59e0b">وضع المعاينة - غير محفوظ للزوار</b>'
-              '<a class="btn btn-sm btn-ghost" href="/admin/pages/' + str(row["id"]) + '/edit">رجوع للتعديل</a></div>')
-    body = ('<div class="container" style="max-width:820px">' + banner +
-            '<div class="card pb-article"><h1 class="pb-h1">' + esc(row["title"]) + '</h1>' +
-            sanitize_html_public(row["content_html"]) + '</div></div>')
-    return page("custom_page_preview", body=body)
+def _stamp_color(c):
+    return c if _STAMP_COLOR_RE.match(c or "") else "#f59e0b"
 
 
-# ---------- الصفحات الثابتة: قائمة وتعديل ----------
-def _sp_get(idx):
-    if idx < 0 or idx >= len(STATIC_PAGES):
-        abort(404)
-    return STATIC_PAGES[idx]
+def _stamp_shade(hexc, factor):
+    r, g, b = (int(hexc[i:i + 2], 16) for i in (1, 3, 5))
+    def f(v):
+        return max(0, min(255, int(v * factor if factor < 1 else v + (255 - v) * (factor - 1))))
+    return "#%02x%02x%02x" % (f(r), f(g), f(b))
 
 
-@app.route("/admin/static-pages")
-@admin_required
-def admin_static_pages():
-    ov = {r["route"]: r for r in db().execute("SELECT * FROM static_pages_overrides").fetchall()}
-    cards = ""
-    for i, (route, label) in enumerate(STATIC_PAGES):
-        r = ov.get(route)
-        custom = bool(r and r["is_active"])
-        reset = ('<form method="POST" action="/admin/static-pages/%d/reset" '
-                 'onsubmit="return confirm(\'إعادة الصفحة للنسخة الأصلية؟\')">'
-                 '<button class="btn btn-sm pb-danger" type="submit">مسح التخصيص</button></form>' % i) if custom else ""
-        cards += ('<div class="card pb-admin-card"><div class="pb-row"><b>' + esc(label) + '</b>'
-                  '<span class="pb-status ' + ("ok" if custom else "off") + '">' +
-                  ("مخصصة" if custom else "الأصلية") + '</span></div>'
-                  '<div class="pb-meta" dir="ltr">' + esc(route) + '</div>'
-                  '<div class="pb-actions">'
-                  '<a class="btn btn-sm btn-ghost" href="' + esc(route) + '" target="_blank" rel="noopener">معاينة الموقع</a>'
-                  '<a class="btn btn-sm" href="/admin/static-pages/' + str(i) + '/edit">تعديل</a>' + reset +
-                  '</div></div>')
-    body = ('<div class="container" style="max-width:900px"><div class="section-title">الصفحات الثابتة</div>'
-            '<div class="pb-top"><a href="/admin" class="btn btn-ghost btn-sm">رجوع</a></div>'
-            '<div class="card" style="margin-bottom:12px;font-size:13px;color:var(--muted);line-height:1.8">'
-            'يمكنك استبدال محتوى أي صفحة من الموقع بتصميمك الخاص. التخصيص يحل محل الصفحة الأصلية مؤقتاً، '
-            'وزر "مسح التخصيص" يعيدها كما كانت.</div>'
-            '<div class="pb-list">' + cards + '</div></div>')
-    return page("admin_static_pages", body=body)
+def _star_points(cx=50, cy=52, R=46, r=20, n=5):
+    pts = []
+    for i in range(n * 2):
+        ang = _math.pi / n * i - _math.pi / 2
+        rad = R if i % 2 == 0 else r
+        pts.append("%.1f,%.1f" % (cx + rad * _math.cos(ang), cy + rad * _math.sin(ang)))
+    return " ".join(pts)
 
 
-@app.route("/admin/static-pages/<int:idx>/edit", methods=["GET", "POST"])
-@admin_required
-def admin_static_edit(idx):
-    route, label = _sp_get(idx)
-    back = "/admin/static-pages/%d/edit" % idx
-    if request.method == "POST":
-        raw = request.form.get("custom_html", "")
-        if not raw.strip():
-            flash("المحتوى فارغ. استخدم مسح التخصيص للعودة للصفحة الأصلية.", "error")
-            return redirect(back)
-        if len(raw) > 300000:
-            flash("المحتوى كبير جداً (الحد 300 ألف حرف).", "error")
-            return redirect(back)
-        db().execute("INSERT INTO static_pages_overrides(route, custom_html, is_active, updated_by, updated_at) "
-                     "VALUES(?,?,1,?,datetime('now')) ON CONFLICT(route) DO UPDATE SET "
-                     "custom_html=excluded.custom_html, is_active=1, updated_by=excluded.updated_by, "
-                     "updated_at=excluded.updated_at", (route, raw, session.get("user_id")))
-        db().commit()
-        log_dev_change("تعديل صفحة ثابتة: " + label, "المسار: " + route, change_type="update",
-                       db_changes="static_pages_overrides")
-        flash("تم حفظ التخصيص.", "success")
-        return redirect(url_for("admin_static_pages"))
-    r = db().execute("SELECT custom_html FROM static_pages_overrides WHERE route=?", (route,)).fetchone()
-    seed = esc(r["custom_html"]) if r else esc(_static_default(route))
-    body = ('<div class="container" style="max-width:900px"><div class="section-title">تعديل: ' + esc(label) + '</div>'
-            '<a href="/admin/static-pages" class="btn btn-ghost btn-sm" style="margin-bottom:16px">رجوع</a>'
-            '<form method="POST" action="' + back + '" class="card" style="padding:18px">'
-            '<label class="pb-label">محتوى HTML للصفحة (يُعرض داخل الموقع)</label>'
-            '<textarea id="spHtml" name="custom_html" rows="22" dir="ltr" spellcheck="false" '
-            'style="width:100%;min-height:420px;font-family:monospace;text-align:left;background:#0f0f1a;'
-            'color:#e8e8f5;border:1px solid #2d2d4a;border-radius:8px;padding:12px;box-sizing:border-box">' + seed + '</textarea>'
-            '<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">'
-            '<button class="btn" type="submit">حفظ</button>'
-            '<button class="btn btn-ghost" type="button" onclick="spPreview()">معاينة مباشرة</button>'
-            '<a class="btn btn-ghost" href="/admin/static-pages">إلغاء</a></div></form></div>'
-            '<div id="spModal" class="pb-modal" onclick="if(event.target===this)this.style.display=\'none\'">'
-            '<div class="pb-modal-box"><div class="pb-row"><b>معاينة</b>'
-            '<button type="button" class="btn btn-sm btn-ghost" onclick="document.getElementById(\'spModal\').style.display=\'none\'">إغلاق</button></div>'
-            '<iframe id="spFrame" sandbox="" referrerpolicy="no-referrer" style="width:100%;height:70vh;border:0;'
-            'border-radius:12px;background:#0b0b1a"></iframe></div></div>'
-            '<script>function spPreview(){'
-            'var fd=new FormData();fd.append("title","' + label.replace('"', '\\"') + '");'
-            'fd.append("content_html",document.getElementById("spHtml").value);'
-            'fetch("/admin/pages/preview",{method:"POST",body:fd,credentials:"same-origin"})'
-            '.then(function(r){return r.text();}).then(function(t){'
-            'document.getElementById("spFrame").srcdoc=t;document.getElementById("spModal").style.display="flex";});}'
-            '</script>')
-    return page("admin_static_edit", body=body)
-
-
-@app.route("/admin/static-pages/<int:idx>/reset", methods=["POST"])
-@admin_required
-def admin_static_reset(idx):
-    route, label = _sp_get(idx)
-    db().execute("DELETE FROM static_pages_overrides WHERE route=?", (route,))
-    db().commit()
-    log_dev_change("مسح تخصيص صفحة: " + label, "المسار: " + route, change_type="update",
-                   db_changes="static_pages_overrides")
-    flash("تمت إعادة الصفحة للنسخة الأصلية.", "success")
-    return redirect(url_for("admin_static_pages"))
-
-
-# ---------- بلوكات لوحة المستخدم ----------
-def _pb_link_visible(u, r):
-    if not r or not r["is_active"]:
-        return False
-    t = r["target_users"] or "all"
-    admin = is_admin(u)
-    return t == "all" or (t == "admin" and admin) or (t == "user" and bool(u) and not admin)
-
-
-def _pb_render_block(b, u):
-    btype = b["block_type"]
-    if btype == "link":
-        r = db().execute("SELECT * FROM custom_links WHERE id=?", (b["reference_id"],)).fetchone()
-        return _pb_link_card(r) if _pb_link_visible(u, r) else ""
-    if btype == "text":
-        return '<div class="card pb-text">' + esc(b["content"] or "").replace("\n", "<br>") + '</div>'
-    if btype == "banner":
-        return '<div class="pb-banner">' + esc(b["content"] or "") + '</div>'
-    if btype == "html":
-        return '<div class="card pb-text">' + sanitize_html_public(b["content"] or "") + '</div>'
-    return ""
-
-
-def _pb_dashboard_block(u):
-    rows = db().execute("SELECT * FROM dashboard_blocks WHERE is_active=1 "
-                        "ORDER BY sort_order ASC, id ASC").fetchall()
-    items = []
-    for b in rows:
-        piece = _pb_render_block(b, u)
-        if not piece:
-            continue
-        cls = {"left": "pb-b-left", "right": "pb-b-right"}.get(b["column_pos"], "pb-b-full")
-        items.append('<div class="pb-b ' + cls + '">' + piece + '</div>')
-    if not items:
-        return ""
-    return ('<div class="container" style="margin-top:8px"><div class="pb-blocks">' +
-            "".join(items) + '</div></div>')
-
-
-def _pb_sync_block(lid, position, active, sort_order):
-    row = db().execute("SELECT id FROM dashboard_blocks WHERE block_type='link' AND reference_id=?",
-                       (lid,)).fetchone()
-    if position == "block":
-        if row:
-            db().execute("UPDATE dashboard_blocks SET is_active=?, sort_order=? WHERE id=?",
-                         (active, sort_order, row["id"]))
-        else:
-            db().execute("INSERT INTO dashboard_blocks(block_type, reference_id, column_pos, sort_order, "
-                         "is_active) VALUES('link', ?, 'full', ?, ?)", (lid, sort_order, active))
-    elif row:
-        db().execute("UPDATE dashboard_blocks SET is_active=0 WHERE id=?", (row["id"],))
-    db().commit()
-
-
-def _pb_migrate_dashboard_links():
-    """يحوّل الأزرار القديمة position='dashboard' إلى بلوكات (مرة واحدة، آمن للتكرار)."""
-    rows = db().execute("SELECT id FROM custom_links WHERE position='dashboard'").fetchall()
-    for r in rows:
-        db().execute("UPDATE custom_links SET position='block' WHERE id=?", (r["id"],))
-        _pb_sync_block(r["id"], "block", 1, 0)
-    if rows:
-        log.info("[BLOCKS] نُقلت %d أزرار قديمة إلى بلوكات لوحة المستخدم", len(rows))
-
-
-def _db_block_form(row=None):
-    links = db().execute("SELECT id, title FROM custom_links ORDER BY id DESC").fetchall()
-    link_opts = '<option value="">- اختر زراً -</option>' + "".join(
-        '<option value="%d"%s>%s</option>' % (l["id"], " selected" if row and row["reference_id"] == l["id"] else "",
-                                             esc(l["title"])) for l in links)
-    type_opts = "".join('<option value="%s"%s>%s</option>' % (k, " selected" if row and row["block_type"] == k else "", lbl)
-                        for k, lbl in DASH_BLOCK_TYPES)
-    col_opts = "".join('<option value="%s"%s>%s</option>' % (k, " selected" if row and row["column_pos"] == k else "", lbl)
-                       for k, lbl in DASH_COLUMNS)
-    content = esc(row["content"] or "") if row else ""
-    sort = row["sort_order"] if row else 0
-    active = " checked" if (row is None or row["is_active"]) else ""
-    action = ("/admin/dashboard-blocks/%d/edit" % row["id"]) if row else "/admin/dashboard-blocks/new"
-    return ('<div class="container" style="max-width:700px"><div class="section-title">' +
-            ("تعديل بلوك" if row else "بلوك جديد") + '</div>'
-            '<a href="/admin/dashboard-blocks" class="btn btn-ghost btn-sm" style="margin-bottom:16px">رجوع</a>'
-            '<form method="POST" action="' + action + '" class="card" style="padding:18px">'
-            '<div class="pb-grid2"><div><label class="pb-label">نوع البلوك</label>'
-            '<select name="block_type" style="' + _PB_INPUT + '">' + type_opts + '</select></div>'
-            '<div><label class="pb-label">العمود</label><select name="column_pos" style="' + _PB_INPUT + '">' + col_opts + '</select></div>'
-            '<div><label class="pb-label">الترتيب داخل العمود</label>'
-            '<input type="number" name="sort_order" value="' + str(sort) + '" style="' + _PB_INPUT + '"></div></div>'
-            '<div style="margin-top:12px"><label class="pb-label">الزر (للنوع زر فقط)</label>'
-            '<select name="reference_id" style="' + _PB_INPUT + '">' + link_opts + '</select></div>'
-            '<div style="margin-top:12px"><label class="pb-label">المحتوى (نص / بانر / HTML)</label>'
-            '<textarea name="content" rows="8" dir="auto" style="' + _PB_INPUT + ';min-height:160px;font-family:inherit">' + content + '</textarea>'
-            '<div class="pb-meta">للنوع HTML يُنظف تلقائياً من السكربتات والأحداث قبل العرض.</div></div>'
-            '<label class="pb-check" style="margin-top:14px"><input type="checkbox" name="is_active"' + active + '> البلوك نشط</label>'
-            '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn" type="submit">حفظ</button>'
-            '<a class="btn btn-ghost" href="/admin/dashboard-blocks">إلغاء</a></div></form></div>')
-
-
-def _db_block_save(bid):
-    btype = request.form.get("block_type", "text")
-    if btype not in [k for k, _ in DASH_BLOCK_TYPES]:
-        btype = "text"
-    col = request.form.get("column_pos", "full")
-    if col not in [k for k, _ in DASH_COLUMNS]:
-        col = "full"
-    try:
-        sort = int(request.form.get("sort_order", "0") or 0)
-    except ValueError:
-        sort = 0
-    ref = request.form.get("reference_id", "")
-    ref_id = int(ref) if btype == "link" and ref.isdigit() else None
-    content = (request.form.get("content") or "")[:PB_MAX_HTML]
-    active = 1 if request.form.get("is_active") == "on" else 0
-    back = "/admin/dashboard-blocks/new" if bid is None else "/admin/dashboard-blocks/%d/edit" % bid
-    if btype == "link" and not ref_id:
-        flash("اختر زراً لهذا البلوك.", "error")
-        return redirect(back)
-    if btype != "link" and not content.strip():
-        flash("المحتوى فارغ.", "error")
-        return redirect(back)
-    if bid is None:
-        db().execute("INSERT INTO dashboard_blocks(block_type, reference_id, content, column_pos, sort_order, "
-                     "is_active) VALUES(?,?,?,?,?,?)", (btype, ref_id, content, col, sort, active))
-        action = "إضافة بلوك"
+def _stamp_generate_svg(name, color, shape, uid):
+    c = _stamp_color(color)
+    light, dark = _stamp_shade(c, 1.35), _stamp_shade(c, 0.6)
+    gid = "stg" + re.sub(r"[^A-Za-z0-9]", "", str(uid))
+    label = esc(name)[:8] or "*"
+    fs = 15 if len(label) <= 3 else (12 if len(label) <= 6 else 9)
+    defs = ('<defs><linearGradient id="%s" x1="0%%" y1="0%%" x2="100%%" y2="100%%">'
+            '<stop offset="0%%" stop-color="%s"/><stop offset="100%%" stop-color="%s"/></linearGradient></defs>'
+            % (gid, light, dark))
+    fill = 'fill="url(#%s)"' % gid
+    if shape == "star":
+        body = '<polygon points="%s" %s stroke="#fff" stroke-width="1.2" stroke-opacity=".6"/>' % (_star_points(), fill)
+        ty = 60
+    elif shape == "shield":
+        body = ('<path d="M50 4 L92 18 L92 50 C92 74 74 90 50 96 C26 90 8 74 8 50 L8 18 Z" %s '
+                'stroke="#fff" stroke-width="1.5" stroke-opacity=".6"/>' % fill)
+        ty = 58
+    elif shape == "crown":
+        body = ('<path d="M10 72 L16 34 L36 52 L50 22 L64 52 L84 34 L90 72 Z" %s stroke="#fff" stroke-width="1.2" stroke-opacity=".6"/>'
+                '<rect x="10" y="72" width="80" height="10" rx="3" %s/>' % (fill, fill))
+        ty = 90
+    elif shape == "ribbon":
+        body = ('<polygon points="18,62 26,84 34,70 42,84 50,62" fill="%s" opacity=".7"/>'
+                '<polygon points="82,62 74,84 66,70 58,84 50,62" fill="%s" opacity=".7"/>'
+                '<rect x="6" y="20" width="88" height="46" rx="8" %s stroke="#fff" stroke-width="1.2" stroke-opacity=".6"/>'
+                % (dark, dark, fill))
+        ty = 52
     else:
-        db().execute("UPDATE dashboard_blocks SET block_type=?, reference_id=?, content=?, column_pos=?, "
-                     "sort_order=?, is_active=? WHERE id=?", (btype, ref_id, content, col, sort, active, bid))
-        action = "تعديل بلوك"
-    db().commit()
-    log_dev_change("%s (%s)" % (action, dict(DASH_BLOCK_TYPES)[btype]),
-                   "العمود: %s - الترتيب: %d - نشط: %s" % (col, sort, "نعم" if active else "لا"),
-                   change_type="feature" if bid is None else "update", db_changes="dashboard_blocks")
-    flash("تم حفظ البلوك.", "success")
-    return redirect(url_for("admin_dashboard_blocks"))
+        body = ('<circle cx="50" cy="50" r="46" %s/>'
+                '<circle cx="50" cy="50" r="40" fill="none" stroke="#fff" stroke-width="1.5" opacity=".7"/>' % fill)
+        ty = 56
+    text = ('<text x="50" y="%d" text-anchor="middle" font-family="Cairo, sans-serif" font-weight="900" '
+            'font-size="%d" fill="#fff">%s</text>' % (ty, fs, label))
+    return ('<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" '
+            'style="width:100%;height:100%;display:block">' + defs + body + text + '</svg>')
 
 
-@app.route("/admin/dashboard-blocks")
-@admin_required
-def admin_dashboard_blocks():
-    rows = db().execute("SELECT * FROM dashboard_blocks ORDER BY column_pos, sort_order, id").fetchall()
-    cards = ""
-    type_lbl = dict(DASH_BLOCK_TYPES)
-    col_lbl = dict(DASH_COLUMNS)
-    for r in rows:
-        ok = bool(r["is_active"])
-        summary = ""
-        if r["block_type"] == "link":
-            lk = db().execute("SELECT title FROM custom_links WHERE id=?", (r["reference_id"],)).fetchone()
-            summary = lk["title"] if lk else "زر محذوف"
-        else:
-            summary = (r["content"] or "")[:80]
-        cards += ('<div class="card pb-admin-card"><div class="pb-row"><b>' + esc(type_lbl.get(r["block_type"], "")) +
-                  ' - ' + esc(summary) + '</b><span class="pb-status ' + ("ok" if ok else "off") + '">' +
-                  ("نشط" if ok else "معطل") + '</span></div>'
-                  '<div class="pb-meta">العمود: ' + esc(col_lbl.get(r["column_pos"], "")) +
-                  ' · الترتيب: ' + str(r["sort_order"]) + '</div>'
-                  '<div class="pb-actions">'
-                  '<form method="POST" action="/admin/dashboard-blocks/' + str(r["id"]) + '/move/up"><button class="btn btn-sm btn-ghost" type="submit">أعلى</button></form>'
-                  '<form method="POST" action="/admin/dashboard-blocks/' + str(r["id"]) + '/move/down"><button class="btn btn-sm btn-ghost" type="submit">أسفل</button></form>'
-                  '<a class="btn btn-sm" href="/admin/dashboard-blocks/' + str(r["id"]) + '/edit">تعديل</a>'
-                  '<form method="POST" action="/admin/dashboard-blocks/' + str(r["id"]) + '/toggle"><button class="btn btn-sm btn-ghost" type="submit">' +
-                  ("تعطيل" if ok else "تفعيل") + '</button></form>'
-                  '<form method="POST" action="/admin/dashboard-blocks/' + str(r["id"]) + '/delete" '
-                  'onsubmit="return confirm(\'حذف هذا البلوك؟\')"><button class="btn btn-sm pb-danger" type="submit">حذف</button></form>'
-                  '</div></div>')
+def _g(row, key):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _stamp_row_svg(row, uid="x"):
+    custom = _g(row, "svg")
+    if custom:
+        clean = _svg_sanitize(custom)
+        if clean:
+            head = clean.split(">", 1)[0]
+            if "style=" in head:
+                return clean
+            return clean.replace("<svg", '<svg style="width:100%;height:100%;display:block"', 1)
+    return _stamp_generate_svg(_g(row, "name") or "", _g(row, "color"), _g(row, "shape") or "seal", uid)
+
+
+def _stamp_badges_html(n):
+    """كل الختوم في مكان واحد فوق البطاقة: الختوم المعينة + الختم الذهبي إذا الرقم مميز."""
+    try:
+        nid = n["id"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    rows = [dict(r) for r in db().execute(
+        "SELECT s.* FROM number_stamps ns JOIN stamps s ON s.id=ns.stamp_id WHERE ns.number_id=? "
+        "ORDER BY s.id", (nid,)).fetchall()]
+    try:
+        prem = bool(n["is_premium"])
+    except (KeyError, IndexError, TypeError):
+        prem = False
+    names = {r["name"] for r in rows}
     if not rows:
-        cards = '<div class="card" style="text-align:center;color:var(--muted)">لا توجد بلوكات بعد.</div>'
-    body = ('<div class="container" style="max-width:960px"><div class="section-title">بلوكات لوحة المستخدم</div>'
-            '<div class="pb-top"><a href="/admin" class="btn btn-ghost btn-sm">رجوع</a>'
-            '<a href="/admin/dashboard-blocks/new" class="btn btn-sm">إضافة بلوك جديد</a></div>'
-            '<div class="pb-list">' + cards + '</div>'
-            '<div class="section-title" style="margin-top:20px">معاينة لوحة المستخدم</div>'
-            '<div class="card" style="padding:8px"><iframe src="/dashboard" style="width:100%;height:520px;border:0;'
-            'border-radius:12px;background:#0b0b1a" title="معاينة"></iframe></div></div>')
-    return page("admin_dashboard_blocks", body=body)
+        return ""
+    out = ""
+    for r in rows:
+        svg = _stamp_row_svg(r, uid="%s_%s" % (nid, r["id"]))
+        out += ('<span title="%s" style="display:inline-flex;width:26px;height:26px;margin-inline-start:4px;'
+                'vertical-align:middle;filter:drop-shadow(0 2px 4px rgba(0,0,0,.45));">%s</span>'
+                % (esc(r["name"]), svg))
+    return '<span style="display:inline-flex;align-items:center;">' + out + '</span>'
 
 
-@app.route("/admin/dashboard-blocks/new", methods=["GET", "POST"])
+def _stamps_bootstrap():
+    d = db()
+    d.execute("INSERT OR IGNORE INTO stamps(name, color, shape) VALUES('مميز', '#f59e0b', 'seal')")
+    sid = d.execute("SELECT id FROM stamps WHERE name='مميز'").fetchone()["id"]
+    d.execute("INSERT OR IGNORE INTO number_stamps(number_id, stamp_id) SELECT id, ? FROM numbers WHERE is_premium=1",
+              (sid,))
+    d.commit()
+
+
+@app.route("/admin/stamps")
 @admin_required
-def admin_block_new():
-    if request.method == "POST":
-        return _db_block_save(None)
-    return page("admin_block_form", body=_db_block_form(None))
+def admin_stamps_page():
+    kind = request.args.get("kind", "all")
+    if kind not in ("all", "available", "sold"):
+        kind = "all"
+    stamps = db().execute("SELECT * FROM stamps ORDER BY id").fetchall()
+    where = "" if kind == "all" else " WHERE status='%s'" % kind
+    nums = db().execute("SELECT id, phone, country, platform, status FROM numbers" + where +
+                        " ORDER BY id DESC LIMIT 200").fetchall()
+    type_rows = ""
+    for st in stamps:
+        type_rows += ('<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;'
+                      'padding:8px 10px;border-bottom:1px solid var(--border)">'
+                      '<span style="display:flex;align-items:center;gap:8px;font-weight:900;font-size:13px">'
+                      '<span style="display:inline-flex;width:30px;height:30px">%s</span>%s</span>'
+                      '<form method="POST" action="/admin/stamps/%d/delete" style="margin:0" '
+                      'onsubmit="return confirm(\'حذف هذا الختم من كل الأرقام؟\')">'
+                      '<button class="btn btn-sm" type="submit" style="background:rgba(239,68,68,.15);color:#ef4444;'
+                      'border:1px solid rgba(239,68,68,.35)">حذف</button></form></div>'
+                      % (_stamp_row_svg(dict(st), uid="p%d" % st["id"]), esc(st["name"]), st["id"]))
+    if not type_rows:
+        type_rows = '<div style="padding:12px;color:var(--muted);font-size:13px">لا توجد ختوم بعد.</div>'
+    checks = "".join('<label style="display:inline-flex;gap:6px;align-items:center;font-size:13px;font-weight:700;'
+                     'margin:4px 10px 4px 0"><input type="checkbox" name="stamp_ids" value="%d"> %s</label>'
+                     % (st["id"], esc(st["name"])) for st in stamps)
+    num_rows = ""
+    for n in nums:
+        num_rows += ('<label style="display:flex;gap:10px;align-items:center;padding:9px 10px;'
+                     'border-bottom:1px solid var(--border);font-size:13px;cursor:pointer;word-break:break-all">'
+                     '<input type="checkbox" name="numbers" value="%d" class="stamp-num" style="width:18px;height:18px;flex-shrink:0">'
+                     '<span style="flex:1">%s | %s | %s</span></label>'
+                     % (n["id"], esc(n["phone"]), esc(n["country"]), esc(n["platform"])))
+    if not num_rows:
+        num_rows = '<div style="padding:14px;color:var(--muted);text-align:center">لا توجد أرقام.</div>'
+    tabs = ""
+    for k, lbl in (("all", "الكل"), ("available", "المتاحة"), ("sold", "المباعة")):
+        act = "background:var(--primary);color:#fff;" if k == kind else "background:var(--card);color:var(--text);"
+        tabs += ('<a href="/admin/stamps?kind=%s" style="padding:8px 12px;border-radius:12px;border:1px solid var(--border);'
+                 'text-decoration:none;font-weight:800;font-size:13px;%s">%s</a>' % (k, act, lbl))
+    shape_opts = "".join('<option value="%s">%s</option>' % (k, esc(lbl)) for k, lbl in _STAMP_SHAPES)
+    body = ('<div class="container" style="max-width:900px">'
+            '<div class="section-title">الختوم</div>'
+            '<div class="card" style="padding:0;margin-bottom:14px;overflow:hidden">'
+            '<div style="padding:12px;font-weight:900;border-bottom:1px solid var(--border)">أنواع الختوم</div>'
+            + type_rows +
+            '<form method="POST" action="/admin/stamps/new" style="display:grid;gap:8px;padding:12px">'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+            '<input name="name" required maxlength="30" placeholder="اسم الختم" '
+            'style="flex:1;min-width:160px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px">'
+            '<input type="color" name="color" value="#f59e0b" style="width:60px;height:42px;border:0;background:none">'
+            '<select name="shape" style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px">'
+            + shape_opts + '</select></div>'
+            '<textarea name="svg" rows="4" dir="ltr" placeholder="اختياري: الصق كود SVG هنا (يُنظف تلقائياً)" '
+            'style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px;font-family:monospace"></textarea>'
+            '<button class="btn btn-sm" type="submit" style="justify-self:start">إضافة ختم</button></form></div>'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + tabs + '</div>'
+            '<form method="POST" action="/admin/stamps/apply" class="card" style="padding:0;overflow:hidden">'
+            '<div style="padding:12px;border-bottom:1px solid var(--border)">'
+            '<div style="font-weight:900;margin-bottom:6px">اختر الختوم</div>' + checks + '</div>'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--border)">'
+            '<label style="display:flex;gap:6px;align-items:center;font-weight:800;font-size:13px">'
+            '<input type="checkbox" onchange="document.querySelectorAll(\'.stamp-num\').forEach(function(c){c.checked=this.checked}.bind(this))"> تحديد كل الأرقام</label>'
+            '<button class="btn btn-sm" type="submit" name="action" value="add">إضافة الختوم للمحدد</button>'
+            '<button class="btn btn-sm btn-ghost" type="submit" name="action" value="remove">إزالة الختوم من المحدد</button>'
+            '</div>' + num_rows + '</form>'
+            '<div style="margin-top:14px"><a href="/admin" class="btn btn-ghost btn-sm">رجوع للوحة</a></div></div>')
+    return page("admin_stamps", body=body)
 
 
-@app.route("/admin/dashboard-blocks/<int:bid>/edit", methods=["GET", "POST"])
+@app.route("/admin/stamps/new", methods=["POST"])
 @admin_required
-def admin_block_edit(bid):
-    row = db().execute("SELECT * FROM dashboard_blocks WHERE id=?", (bid,)).fetchone()
-    if not row:
-        abort(404)
-    if request.method == "POST":
-        return _db_block_save(bid)
-    return page("admin_block_form", body=_db_block_form(row))
-
-
-@app.route("/admin/dashboard-blocks/<int:bid>/delete", methods=["POST"])
-@admin_required
-def admin_block_delete(bid):
-    row = db().execute("SELECT * FROM dashboard_blocks WHERE id=?", (bid,)).fetchone()
-    if not row:
-        abort(404)
-    db().execute("DELETE FROM dashboard_blocks WHERE id=?", (bid,))
-    db().commit()
-    log_dev_change("حذف بلوك لوحة المستخدم", "النوع: " + row["block_type"], change_type="update",
-                   db_changes="dashboard_blocks")
-    flash("تم حذف البلوك.", "success")
-    return redirect(url_for("admin_dashboard_blocks"))
-
-
-@app.route("/admin/dashboard-blocks/<int:bid>/toggle", methods=["POST"])
-@admin_required
-def admin_block_toggle(bid):
-    row = db().execute("SELECT * FROM dashboard_blocks WHERE id=?", (bid,)).fetchone()
-    if not row:
-        abort(404)
-    new_state = 0 if row["is_active"] else 1
-    db().execute("UPDATE dashboard_blocks SET is_active=? WHERE id=?", (new_state, bid))
-    db().commit()
-    log_dev_change(("تفعيل" if new_state else "تعطيل") + " بلوك لوحة المستخدم", "النوع: " + row["block_type"],
-                   change_type="update", db_changes="dashboard_blocks")
-    return redirect(url_for("admin_dashboard_blocks"))
-
-
-@app.route("/admin/dashboard-blocks/<int:bid>/move/<direction>", methods=["POST"])
-@admin_required
-def admin_block_move(bid, direction):
-    if direction not in ("up", "down"):
-        abort(404)
-    row = db().execute("SELECT * FROM dashboard_blocks WHERE id=?", (bid,)).fetchone()
-    if not row:
-        abort(404)
-    group = db().execute("SELECT id FROM dashboard_blocks WHERE column_pos=? "
-                         "ORDER BY sort_order ASC, id ASC", (row["column_pos"],)).fetchall()
-    ids = [g["id"] for g in group]
-    i = ids.index(bid)
-    j = i - 1 if direction == "up" else i + 1
-    if 0 <= j < len(ids):
-        ids[i], ids[j] = ids[j], ids[i]
-        for n, item_id in enumerate(ids):
-            db().execute("UPDATE dashboard_blocks SET sort_order=? WHERE id=?", (n, item_id))
+def admin_stamps_new():
+    name = (request.form.get("name") or "").strip()[:30]
+    color = _stamp_color(request.form.get("color", "#f59e0b"))
+    shape = request.form.get("shape", "seal")
+    if shape not in [k for k, _ in _STAMP_SHAPES]:
+        shape = "seal"
+    raw_svg = (request.form.get("svg") or "").strip()
+    clean_svg = None
+    if raw_svg:
+        clean_svg = _svg_sanitize(raw_svg)
+        if not clean_svg:
+            flash("كود SVG غير صالح. تأكد أنه يبدأ بـ <svg> وينتهي بـ </svg>.", "error")
+            return redirect(url_for("admin_stamps_page"))
+    if not name:
+        flash("اكتب اسم الختم.", "error")
+        return redirect(url_for("admin_stamps_page"))
+    try:
+        db().execute("INSERT INTO stamps(name, color, shape, svg) VALUES(?,?,?,?)", (name, color, shape, clean_svg))
         db().commit()
-        log_dev_change("ترتيب بلوكات لوحة المستخدم", "نقل بلوك " + ("للأعلى" if direction == "up" else "للأسفل"),
-                       change_type="update", db_changes="dashboard_blocks")
-    return redirect(url_for("admin_dashboard_blocks"))
+        audit("stamp_create", "%s shape=%s custom=%s" % (name, shape, bool(clean_svg)))
+        flash("تمت إضافة الختم: " + name, "success")
+    except sqlite3.IntegrityError:
+        flash("هذا الختم موجود بالفعل.", "error")
+    return redirect(url_for("admin_stamps_page"))
 
 
-DASH_CSS_EXTRA = """
-.pb-blocks { display:grid; grid-template-columns: 1fr; gap:12px; }
-@media (min-width:720px) {
-  .pb-blocks { grid-template-columns: 1fr 1fr; }
-  .pb-b-full { grid-column: 1 / -1; }
-}
-.pb-text { line-height:1.9; }
-.pb-banner { padding:18px; border-radius:18px; font-weight:800; text-align:center;
-  background: linear-gradient(135deg, rgba(99,102,241,.35), rgba(16,185,129,.25)); border:1px solid var(--border); }
-"""
+
+# ============================================================
+# صفحة الأخطاء والإصلاح الذكي (أدمن)
+# ============================================================
+@app.route("/admin/errors")
+@admin_required
+def admin_errors_page():
+    try:
+        rows = db().execute("SELECT * FROM error_log ORDER BY id DESC LIMIT 60").fetchall()
+    except sqlite3.Error:
+        self_heal_schema()
+        rows = db().execute("SELECT * FROM error_log ORDER BY id DESC LIMIT 60").fetchall()
+    kinds = {}
+    for r in rows:
+        kinds[r["error_type"]] = kinds.get(r["error_type"], 0) + 1
+    summary = "".join('<span style="display:inline-block;margin:4px 6px 4px 0;padding:6px 12px;border-radius:12px;'
+                      'background:var(--card);border:1px solid var(--border);font-size:13px;font-weight:800">'
+                      '%s: %d</span>' % (esc(k), v) for k, v in kinds.items()) or \
+              '<span style="color:var(--muted);font-size:13px">لا توجد أخطاء مسجلة. ممتاز.</span>'
+    items = ""
+    for r in rows:
+        badge = ("تم الإصلاح" if r["fixed"] else "يحتاج مراجعة")
+        color = "#10b981" if r["fixed"] else "#f59e0b"
+        items += ('<div class="card" style="padding:12px;margin-bottom:10px;font-size:13px;line-height:1.7">'
+                  '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">'
+                  '<b>%s · %s</b><span style="color:%s;font-weight:800">%s</span></div>'
+                  '<div style="color:var(--muted);word-break:break-all" dir="ltr">%s %s</div>'
+                  '<div style="word-break:break-word">%s</div>'
+                  '<div style="color:var(--muted)">الإجراء: %s</div></div>'
+                  % (esc(r["created_at"]), esc(r["error_type"]), color, badge,
+                     esc(r["method"]), esc(r["path"]), esc(r["message"]), esc(r["action"] or "")))
+    if not rows:
+        items = '<div class="card" style="text-align:center;color:var(--muted)">لا توجد سجلات.</div>'
+    body = ('<div class="container" style="max-width:820px">'
+            '<div class="section-title">الأخطاء والإصلاح الذكي</div>'
+            '<div class="card" style="padding:14px;margin-bottom:12px">'
+            '<div style="font-weight:900;margin-bottom:8px">ملخص الأخطاء</div>' + summary + '</div>'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
+            '<form method="POST" action="/admin/errors/smart-fix" style="margin:0">'
+            '<button class="btn" type="submit">فحص وإصلاح ذكي الآن</button></form>'
+            '<form method="POST" action="/admin/errors/clear" style="margin:0" '
+            'onsubmit="return confirm(\'مسح سجل الأخطاء؟\')">'
+            '<button class="btn btn-ghost" type="submit">مسح السجل</button></form>'
+            '<a href="/admin/database" class="btn btn-ghost">قاعدة البيانات</a>'
+            '<a href="/admin" class="btn btn-ghost">رجوع للوحة</a></div>'
+            + items + '</div>')
+    return page("admin_errors", body=body)
+
+
+@app.route("/admin/errors/smart-fix", methods=["POST"])
+@admin_required
+def admin_errors_smart_fix():
+    rep = self_heal_schema()
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
+        con.execute("ANALYZE")
+        con.execute("PRAGMA optimize")
+        con.commit()
+    finally:
+        con.close()
+    audit("smart_fix", "actions=%d integrity=%s" % (len(rep["actions"]), integ))
+    flash("تم الفحص: خطوات الإصلاح %d، فحص السلامة: %s" % (len(rep["actions"]), integ),
+          "success" if integ == "ok" else "error")
+    return redirect(url_for("admin_errors_page"))
+
+
+@app.route("/admin/errors/clear", methods=["POST"])
+@admin_required
+def admin_errors_clear():
+    db().execute("DELETE FROM error_log")
+    db().commit()
+    audit("errors_clear", "")
+    flash("تم مسح سجل الأخطاء.", "success")
+    return redirect(url_for("admin_errors_page"))
+
 
 def bootstrap_database():
     """تهيئة آمنة وقابلة للتكرار: تنشئ المجلدات والجداول والأعمدة الناقصة."""
@@ -12760,9 +12307,10 @@ def bootstrap_database():
 
     try:
         with app.app_context():
-            _pb_migrate_dashboard_links()
+            _stamps_bootstrap()
     except Exception:
-        log.exception("فشل ترحيل بلوكات لوحة المستخدم")
+        log.exception("فشل تهيئة الختوم")
+
 
     for name, fn in (("auto_fix_db", auto_fix_db),
                      ("seed_buy_prices", seed_buy_prices),
