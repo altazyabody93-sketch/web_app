@@ -574,6 +574,139 @@ DEFAULT_BUY_PRICES = [
     ("نيجيريا", "234", 0.60, "🇳🇬"),
     ("كينيا", "254", 0.60, "🇰🇪"),
     ("إثيوبيا", "251", 0.50, "🇪🇹"),
+    ("الصومال", "252", 0.40, "🇸🇴"),
+    ("جيبوتي", "253", 0.40, "🇩🇯"),
+    ("موريتانيا", "222", 0.40, "🇲🇷"),
+    ("إيران", "98", 0.50, "🇮🇷"),
+    ("أفغانستان", "93", 0.40, "🇦🇫"),
+    ("كازاخستان", "7", 0.60, "🇰🇿"),
+    ("التشيك", "420", 0.80, "🇨🇿"),
+    ("رومانيا", "40", 0.70, "🇷🇴"),
+    ("المجر", "36", 0.70, "🇭🇺"),
+    ("بلغاريا", "359", 0.60, "🇧🇬"),
+    ("صربيا", "381", 0.60, "🇷🇸"),
+    ("كرواتيا", "385", 0.80, "🇭🇷"),
+    ("نيوزيلندا", "64", 1.60, "🇳🇿"),
+    ("تشيلي", "56", 1.00, "🇨🇱"),
+    ("كولومبيا", "57", 0.80, "🇨🇴"),
+    ("بيرو", "51", 0.80, "🇵🇪"),
+    ("فنزويلا", "58", 0.60, "🇻🇪"),
+    ("كوبا", "53", 0.60, "🇨🇺"),
+    ("غانا", "233", 0.50, "🇬🇭"),
+    ("تنزانيا", "255", 0.40, "🇹🇿"),
+    ("أوغندا", "256", 0.40, "🇺🇬"),
+    ("الكاميرون", "237", 0.50, "🇨🇲"),
+    ("ساحل العاج", "225", 0.50, "🇨🇮"),
+    ("السنغال", "221", 0.50, "🇸🇳"),
+    ("مدغشقر", "261", 0.40, "🇲🇬"),
+    ("الكونغو الديمقراطية", "243", 0.45, "🇨🇩"),
+    ("جمهورية الكونغو", "242", 0.45, "🇨🇬"),
+    ("أنغولا", "244", 0.50, "🇦🇴"),
+    ("موزمبيق", "258", 0.40, "🇲🇿"),
+    ("زامبيا", "260", 0.45, "🇿🇲"),
+    ("زيمبابوي", "263", 0.45, "🇿🇼"),
+    ("ملاوي", "265", 0.40, "🇲🇼"),
+    ("بوتسوانا", "267", 0.60, "🇧🇼"),
+    ("ناميبيا", "264", 0.60, "🇳🇦"),
+    ("ليسوتو", "266", 0.45, "🇱🇸"),
+    ("إسواتيني", "268", 0.50, "🇸🇿"),
+    ("رواندا", "250", 0.45, "🇷🇼"),
+    ("بوروندي", "257", 0.40, "🇧🇮"),
+    ("جنوب السودان", "211", 0.40, "🇸🇸"),
+    ("إريتريا", "291", 0.40, "🇪🇷"),
+    ("ليبيريا", "231", 0.45, "🇱🇷"),
+    ("سيراليون", "232", 0.45, "🇸🇱"),
+    ("غينيا", "224", 0.45, "🇬🇳"),
+    ("توغو", "228", 0.45, "🇹🇬"),
+    ("بنين", "229", 0.45, "🇧🇯"),
+    ("النيجر", "227", 0.40, "🇳🇪"),
+    ("بوركينا فاسو", "226", 0.40, "🇧🇫"),
+    ("مالي", "223", 0.40, "🇲🇱"),
+    ("تشاد", "235", 0.40, "🇹🇩"),
+    ("الغابون", "241", 0.55, "🇬🇦"),
+    ("غينيا الاستوائية", "240", 0.50, "🇬🇶"),
+    ("الرأس الأخضر", "238", 0.50, "🇨🇻"),
+    ("غامبيا", "220", 0.40, "🇬🇲"),
+    ("غينيا بيساو", "245", 0.40, "🇬🇼"),
+    ("موريشيوس", "230", 0.60, "🇲🇺"),
+    ("سيشل", "248", 0.60, "🇸🇨"),
+    ("ساو تومي وبرينسيبي", "239", 0.50, "🇸🇹"),
+    ("أذربيجان", "994", 0.60, "🇦🇿"),
+    ("أرمينيا", "374", 0.60, "🇦🇲"),
+    ("جورجيا", "995", 0.70, "🇬🇪"),
+    ("أوزبكستان", "998", 0.50, "🇺🇿"),
+    ("تركمانستان", "993", 0.50, "🇹🇲"),
+    ("قيرغيزستان", "996", 0.45, "🇰🇬"),
+    ("طاجيكستان", "992", 0.45, "🇹🇯"),
+    ("منغوليا", "976", 0.50, "🇲🇳"),
+    ("نيبال", "977", 0.40, "🇳🇵"),
+    ("سريلانكا", "94", 0.40, "🇱🇰"),
+    ("ميانمار", "95", 0.40, "🇲🇲"),
+    ("كمبوديا", "855", 0.50, "🇰🇭"),
+    ("لاوس", "856", 0.45, "🇱🇦"),
+    ("بروناي", "673", 0.80, "🇧🇳"),
+    ("تيمور الشرقية", "670", 0.45, "🇹🇱"),
+    ("هونغ كونغ", "852", 1.20, "🇭🇰"),
+    ("تايوان", "886", 1.00, "🇹🇼"),
+    ("المالديف", "960", 0.60, "🇲🇻"),
+    ("بوتان", "975", 0.45, "🇧🇹"),
+    ("كوريا الشمالية", "850", 0.80, "🇰🇵"),
+    ("إسرائيل", "972", 1.00, "🇮🇱"),
+    ("أيسلندا", "354", 1.80, "🇮🇸"),
+    ("لوكسمبورغ", "352", 1.70, "🇱🇺"),
+    ("مالطا", "356", 1.20, "🇲🇹"),
+    ("قبرص", "357", 1.00, "🇨🇾"),
+    ("ألبانيا", "355", 0.70, "🇦🇱"),
+    ("البوسنة والهرسك", "387", 0.70, "🇧🇦"),
+    ("مقدونيا الشمالية", "389", 0.60, "🇲🇰"),
+    ("الجبل الأسود", "382", 0.70, "🇲🇪"),
+    ("سلوفاكيا", "421", 0.90, "🇸🇰"),
+    ("سلوفينيا", "386", 1.00, "🇸🇮"),
+    ("إستونيا", "372", 1.00, "🇪🇪"),
+    ("لاتفيا", "371", 0.90, "🇱🇻"),
+    ("ليتوانيا", "370", 0.90, "🇱🇹"),
+    ("بيلاروسيا", "375", 0.80, "🇧🇾"),
+    ("مولدوفا", "373", 0.70, "🇲🇩"),
+    ("موناكو", "377", 2.00, "🇲🇨"),
+    ("أندورا", "376", 1.50, "🇦🇩"),
+    ("ليختنشتاين", "423", 2.00, "🇱🇮"),
+    ("سان مارينو", "378", 1.50, "🇸🇲"),
+    ("كوستاريكا", "506", 0.80, "🇨🇷"),
+    ("بنما", "507", 0.80, "🇵🇦"),
+    ("الإكوادور", "593", 0.70, "🇪🇨"),
+    ("بوليفيا", "591", 0.60, "🇧🇴"),
+    ("باراغواي", "595", 0.60, "🇵🇾"),
+    ("أوروغواي", "598", 0.90, "🇺🇾"),
+    ("هندوراس", "504", 0.50, "🇭🇳"),
+    ("السلفادور", "503", 0.60, "🇸🇻"),
+    ("غواتيمالا", "502", 0.60, "🇬🇹"),
+    ("نيكاراغوا", "505", 0.50, "🇳🇮"),
+    ("جامايكا", "1876", 1.00, "🇯🇲"),
+    ("هايتي", "509", 0.50, "🇭🇹"),
+    ("جمهورية الدومينيكان", "1809", 0.80, "🇩🇴"),
+    ("ترينيداد وتوباغو", "1868", 1.00, "🇹🇹"),
+    ("باربادوس", "1246", 1.00, "🇧🇧"),
+    ("جزر البهاما", "1242", 1.20, "🇧🇸"),
+    ("بليز", "501", 0.70, "🇧🇿"),
+    ("غيانا", "592", 0.60, "🇬🇾"),
+    ("سورينام", "597", 0.70, "🇸🇷"),
+    ("بورتوريكو", "1787", 1.20, "🇵🇷"),
+    ("أنتيغوا وبربودا", "1268", 1.00, "🇦🇬"),
+    ("سانت لوسيا", "1758", 1.00, "🇱🇨"),
+    ("غرينادا", "1473", 1.00, "🇬🇩"),
+    ("سانت كيتس ونيفيس", "1869", 1.00, "🇰🇳"),
+    ("سانت فنسنت", "1784", 1.00, "🇻🇨"),
+    ("دومينيكا", "1767", 1.00, "🇩🇲"),
+    ("فيجي", "679", 0.90, "🇫🇯"),
+    ("بابوا غينيا الجديدة", "675", 0.80, "🇵🇬"),
+    ("ساموا", "685", 0.80, "🇼🇸"),
+    ("تونغا", "676", 0.80, "🇹🇴"),
+    ("فانواتو", "678", 0.80, "🇻🇺"),
+    ("جزر سليمان", "677", 0.80, "🇸🇧"),
+    ("كيريباتي", "686", 0.80, "🇰🇮"),
+    ("ناورو", "674", 0.90, "🇳🇷"),
+    ("ميكرونيزيا", "691", 0.90, "🇫🇲"),
+    ("توفالو", "688", 0.90, "🇹🇻"),
 ]
 
 def seed_buy_prices():
@@ -589,11 +722,16 @@ def seed_buy_prices():
             con.close()
             return
         count = con.execute("SELECT COUNT(*) c FROM buy_prices").fetchone()["c"]
+        # إضافة أي دولة ناقصة من القائمة الافتراضية (بدون ما تغيّر أسعار الموجود)
+        for _c, _code, _p, _f in DEFAULT_BUY_PRICES:
+            if not con.execute("SELECT 1 FROM buy_prices WHERE country=?", (_c,)).fetchone():
+                con.execute("INSERT INTO buy_prices(country, code, price, flag) VALUES(?,?,?,?)", (_c, _code, _p, _f))
+        con.commit()
         if count == 0:
             # الجدول فاضي — نزرع كل الدول الافتراضية
             for country, code, price, flag in DEFAULT_BUY_PRICES:
                 con.execute(
-                    "INSERT INTO buy_prices(country, code, price, flag) VALUES(?,?,?,?)",
+                    "INSERT OR IGNORE INTO buy_prices(country, code, price, flag) VALUES(?,?,?,?)",
                     (country, code, price, flag)
                 )
             con.commit()
@@ -2655,7 +2793,7 @@ def preorder():
 @login_required
 def rate_number(nid):
     u = current_user()
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"])).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     if not n: abort(404)
     try: stars = int(request.form.get("stars", "0"))
     except: stars = 0
@@ -3007,7 +3145,7 @@ def buy(nid):
 @login_required
 def my_numbers_list():
     u = current_user()
-    nums = db().execute("SELECT * FROM numbers WHERE buyer_id=? ORDER BY sold_at DESC", (u["user_id"],)).fetchall()
+    nums = db().execute("SELECT * FROM numbers WHERE buyer_id=? AND COALESCE(hidden_for_buyer,0)=0 ORDER BY sold_at DESC", (u["user_id"],)).fetchall()
     # تصفير الإشعارات هنا (لما المستخدم يفتح صفحة أرقامي)
     db().execute("UPDATE numbers SET seen_by_buyer=1 WHERE buyer_id=? AND seen_by_buyer=0", (u["user_id"],))
     db().commit()
@@ -3058,7 +3196,7 @@ def referral():
 @login_required
 def my_delete_number(nid):
     u = current_user()
-    db().execute("DELETE FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"]))
+    db().execute("UPDATE numbers SET hidden_for_buyer=1 WHERE id=? AND buyer_id=?", (nid, u["user_id"]))
     db().commit()
     flash("تم حذف الرقم من قائمتك.", "success")
     return redirect(url_for("my_numbers_list"))
@@ -3187,7 +3325,7 @@ def admin_code_monitor_clear():
 @login_required
 def dashboard():
     u = current_user()
-    nums = db().execute("SELECT * FROM numbers WHERE buyer_id=? ORDER BY sold_at DESC", (u["user_id"],)).fetchall()
+    nums = db().execute("SELECT * FROM numbers WHERE buyer_id=? AND COALESCE(hidden_for_buyer,0)=0 ORDER BY sold_at DESC", (u["user_id"],)).fetchall()
     deps = db().execute("SELECT * FROM deposits WHERE user_id=? ORDER BY id DESC LIMIT 10", (u["user_id"],)).fetchall()
     return page("dashboard", my_numbers=nums, my_deposits=deps, active="dashboard")
 
@@ -5518,7 +5656,7 @@ def admin_sold_delete(nid):
 @app.route("/my/number/<int:nid>")
 def my_number(nid):
     u = current_user()
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"])).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     if not n: abort(404)
     
     # تصفير إشعار هذا الرقم لما المستخدم يفتحه
@@ -5526,7 +5664,7 @@ def my_number(nid):
     db().commit()
     
     # نرجع نجيب البيانات بعد التحديث
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"])).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     
     # حساب الأيام (3 أيام = 72 ساعة)
     from datetime import datetime
@@ -5856,7 +5994,7 @@ def deposit_binance():
 @login_required
 def fetch_otp_route(nid):
     u = current_user()
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"])).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "غير مصرح"}), 403
     
@@ -6073,7 +6211,7 @@ def auto_fetch_otp(user_id, number_id, max_seconds=300, interval=5):
         
         try:
             with app.app_context():
-                row = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", 
+                row = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", 
                                     (number_id, user_id)).fetchone()
                 if not row:
                     print(f"[AUTO-OTP #{number_id}] Number not found or not owned")
@@ -6228,6 +6366,8 @@ def page(name, active="", **ctx):
         border = "rgba(16,185,129,0.3)" if c == "success" else ("rgba(239,68,68,0.3)" if c == "error" else "rgba(99,102,241,0.3)")
         fh += f'''<div class="toast-message" style="display:flex;align-items:center;gap:12px;background:{bg};border:1px solid {border};padding:14px 18px;border-radius:14px;margin-bottom:10px;color:{color};font-weight:600;font-size:14px;animation: slideDown 0.4s ease; position: relative; backdrop-filter: blur(10px);"><div style="flex-shrink:0;">{ico(icon, 20)}</div><div style="flex:1; line-height:1.5;">{m}</div><button onclick="this.parentElement.style.display='none'" style="background:none;border:none;color:{color};cursor:pointer;opacity:0.6;padding:0;display:flex;">{ico("x", 18)}</button></div>'''
 
+    if name in ("login", "register"):
+        fh = _auth_loader_html(name) + fh
     _bt = BACK_TARGETS.get(name)
     if _bt:
         fh = _back_bar(_bt[0], _bt[1]) + fh
@@ -8502,6 +8642,7 @@ def page(name, active="", **ctx):
             {tile("/admin/sold", "الأرقام المباعة", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', "var(--primary2)")}
             {tile("/admin/database", "إدارة قاعدة البيانات", '<svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>', "var(--primary)")}
             {tile("/admin/errors", "الأخطاء والإصلاح الذكي", ico("shield", 24), "var(--danger)")}
+            {tile("/admin/welcome-sound", "صوت الترحيب", ico("settings", 24), "var(--primary)")}
             {tile("/admin/bulk-delete", "الحذف الجماعي", ico("trash", 24), "var(--danger)")}
             {tile("/admin/stamps", "الختوم", ico("star", 24), "var(--warn)")}
           </div>
@@ -9575,7 +9716,7 @@ def admin_test_binance():
 @login_required
 def check_otp(nid):
     u = current_user()
-    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=?", (nid, u["user_id"])).fetchone()
+    n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "غير مصرح"})
     
@@ -11542,6 +11683,9 @@ html { scroll-behavior: auto; }
 body.mt-ready .container, ::view-transition-old(root), ::view-transition-new(root) {
     animation: none !important; transition: none !important; }
 }
+
+.bottom-nav a { transition: transform .12s ease, background .15s ease, color .15s ease; border-radius: 14px; -webkit-tap-highlight-color: transparent; }
+.bottom-nav a:active, .bottom-nav a.is-tapped { transform: scale(.9); background: rgba(99,102,241,.22); color: #818cf8; }
 """
 
 SMOOTH_JS = """
@@ -11571,7 +11715,7 @@ SMOOTH_JS = """
 (function(){
   if (window.__spaBound) return;
   window.__spaBound = true;
-  var SPA_PATHS = ['/dashboard','/deposit','/support','/referral','/vip','/profile','/my/numbers','/sell','/about','/transfer'];
+  var SPA_PATHS = ['/', '/store', '/dashboard','/deposit','/support','/referral','/vip','/profile','/my/numbers','/sell','/about','/transfer'];
   var IDS = ['pageHead','pageMain','topNavWrap','botNavWrap'];
   var busy = false;
   function allowed(a){
@@ -11643,6 +11787,13 @@ SMOOTH_JS = """
     else { location.href = a.getAttribute('href'); }
   });
 })();
+
+document.addEventListener('pointerdown', function(e){
+  var a = e.target && e.target.closest ? e.target.closest('.bottom-nav a') : null;
+  if (!a) return;
+  a.classList.add('is-tapped');
+  setTimeout(function(){ a.classList.remove('is-tapped'); }, 400);
+}, {passive: true});
 """
 
 
@@ -11710,6 +11861,9 @@ BULK_KINDS = {
     "vouchers": ("الفاوتشرات", "vouchers"),
     "coupons": ("الكوبونات", "coupons"),
     "sold": ("الأرقام المباعة", "numbers"),
+    "inventory": ("الأرقام المضافة (المتاحة)", "numbers"),
+    "all_numbers": ("كل الأرقام المسجلة", "numbers"),
+    "pending": ("الأرقام غير المؤكدة", "numbers"),
 }
 
 
@@ -11731,6 +11885,21 @@ def _bulk_rows(kind):
                             "ORDER BY rowid DESC LIMIT 300").fetchall()
         return [(r["code"], "%s | خصم %s%% | استخدام %s/%s" % (r["code"], r["percent"],
                  r["used_count"], r["max_uses"])) for r in rows]
+    if kind == "all_numbers":
+        rows = db().execute("SELECT id, phone, country, platform, status, price FROM numbers "
+                            "ORDER BY id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | %s | %s | %s | $%.2f" % (r["phone"], r["country"], r["platform"],
+                 r["status"], float(r["price"] or 0))) for r in rows]
+    if kind == "pending":
+        rows = db().execute("SELECT id, phone, country, platform, price FROM numbers "
+                            "WHERE status='pending' ORDER BY id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | %s | %s | $%.2f" % (r["phone"], r["country"], r["platform"],
+                 float(r["price"] or 0))) for r in rows]
+    if kind == "inventory":
+        rows = db().execute("SELECT id, phone, country, platform, price FROM numbers "
+                            "WHERE status='available' ORDER BY id DESC LIMIT 300").fetchall()
+        return [(str(r["id"]), "%s | %s | $%.2f" % (r["phone"], r["country"], float(r["price"] or 0)))
+                for r in rows]
     if kind == "sold":
         rows = db().execute("SELECT id, phone, country, platform, paid_price, sold_at FROM numbers "
                             "WHERE status='sold' ORDER BY id DESC LIMIT 300").fetchall()
@@ -11743,7 +11912,10 @@ def _bulk_total(kind):
     q = {"codes": "SELECT COUNT(*) c FROM code_logs",
          "vouchers": "SELECT COUNT(*) c FROM vouchers",
          "coupons": "SELECT COUNT(*) c FROM coupons",
-         "sold": "SELECT COUNT(*) c FROM numbers WHERE status='sold'"}[kind]
+         "sold": "SELECT COUNT(*) c FROM numbers WHERE status='sold'",
+         "inventory": "SELECT COUNT(*) c FROM numbers WHERE status='available'",
+         "all_numbers": "SELECT COUNT(*) c FROM numbers",
+         "pending": "SELECT COUNT(*) c FROM numbers WHERE status='pending'"}[kind]
     return db().execute(q).fetchone()["c"]
 
 
@@ -11761,38 +11933,56 @@ def admin_bulk_delete_page():
     kind = request.args.get("kind", "codes")
     if kind not in BULK_KINDS:
         kind = "codes"
+    q = (request.args.get("q") or "").strip()[:80]
     label, _tbl = BULK_KINDS[kind]
     tabs = ""
     for k, (lbl, _t) in BULK_KINDS.items():
         active = "background:var(--primary);color:#fff;" if k == kind else "background:var(--card);color:var(--text);"
-        tabs += ('<a href="/admin/bulk-delete?kind=%s" style="padding:10px 14px;border-radius:12px;'
-                 'border:1px solid var(--border);text-decoration:none;font-weight:800;font-size:13px;%s">%s</a>'
+        tabs += ('<a href="/admin/bulk-delete?kind=%s" style="padding:9px 12px;border-radius:12px;'
+                 'border:1px solid var(--border);text-decoration:none;font-weight:800;font-size:12px;%s">%s</a>'
                  % (k, active, esc(lbl)))
     items = _bulk_rows(kind)
     total = _bulk_total(kind)
+    if q:
+        items = [(k, t) for k, t in items if q.lower() in t.lower()]
     rows_html = ""
     for key, text in items:
-        rows_html += ('<label style="display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid var(--border);'
-                      'font-size:13px;word-break:break-all;cursor:pointer">'
+        rows_html += ('<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding-left:8px">'
+                      '<label style="display:flex;gap:10px;align-items:center;padding:10px;flex:1;font-size:13px;'
+                      'word-break:break-all;cursor:pointer">'
                       '<input type="checkbox" name="keys" value="%s" class="bulk-cb" style="width:18px;height:18px;flex-shrink:0">'
-                      '<span>%s</span></label>' % (esc(key), esc(text)))
+                      '<span>%s</span></label>'
+                      '<button type="submit" formaction="/admin/bulk-delete/%s?single=%s" name="mode" value="selected" '
+                      'formnovalidate onclick="return confirm(\'حذف هذا العنصر؟ نسخة احتياطية أولاً.\')" '
+                      'style="flex-shrink:0;margin-inline-end:8px;padding:6px 10px;border-radius:10px;border:1px solid rgba(239,68,68,.35);'
+                      'background:rgba(239,68,68,.15);color:#ef4444;font-weight:800;font-size:12px;cursor:pointer">حذف</button>'
+                      '</div>' % (esc(key), esc(text), kind, esc(key)))
     if not rows_html:
         rows_html = '<div style="padding:20px;text-align:center;color:var(--muted)">لا توجد عناصر.</div>'
+    search_form = ('<form method="GET" action="/admin/bulk-delete" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+                   '<input type="hidden" name="kind" value="%s">'
+                   '<input name="q" value="%s" placeholder="بحث بالرقم أو الدولة أو المنصة أو الكود" '
+                   'style="flex:1;min-width:200px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px">'
+                   '<button class="btn btn-sm" type="submit">بحث</button>'
+                   '%s</form>') % (kind, esc(q), ('<a class="btn btn-sm btn-ghost" href="/admin/bulk-delete?kind=%s">مسح البحث</a>' % kind) if q else "")
+    delete_all_btn = ("" if q else
+        '<button class="btn btn-sm" type="submit" name="mode" value="all" formnovalidate '
+        'style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.35)" '
+        'onclick="return bulkConfirm(\'all\')">حذف الكل في هذا القسم</button>')
     body = ('<div class="container" style="max-width:900px">'
             '<div class="section-title">الحذف الجماعي</div>'
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' + tabs + '</div>'
-            '<div class="card" style="padding:14px;margin-bottom:12px;font-size:13px;color:var(--muted);line-height:1.8">'
-            + esc(label) + ': ' + str(total) + ' عنصر. يتم عرض آخر 300. قبل كل حذف تُؤخذ نسخة احتياطية كاملة.'
+            + search_form +
+            '<div class="card" style="padding:12px;margin-bottom:12px;font-size:13px;color:var(--muted);line-height:1.8">'
+            + esc(label) + ': ' + str(total) + ' عنصر، المعروض ' + str(len(items)) + '. قبل كل حذف تُؤخذ نسخة احتياطية كاملة.'
             '</div>'
             '<form method="POST" action="/admin/bulk-delete/' + kind + '" id="bulkForm" class="card" style="padding:0;overflow:hidden">'
             '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--border)">'
             '<label style="display:flex;gap:6px;align-items:center;font-weight:800;font-size:13px">'
-            '<input type="checkbox" id="bulkAll" onchange="document.querySelectorAll(\'.bulk-cb\').forEach(function(c){c.checked=this.checked}.bind(this))"> تحديد الكل</label>'
-            '<button class="btn btn-sm" type="submit" name="mode" value="selected" '
+            '<input type="checkbox" onchange="document.querySelectorAll(\'.bulk-cb\').forEach(function(c){c.checked=this.checked}.bind(this))"> تحديد الكل</label>'
+            '<button class="btn btn-sm" type="submit" name="mode" value="selected" formnovalidate '
             'onclick="return bulkConfirm(\'selected\')">حذف المحدد</button>'
-            '<button class="btn btn-sm" type="submit" name="mode" value="all" '
-            'style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.35)" '
-            'onclick="return bulkConfirm(\'all\')">حذف الكل</button>'
+            + delete_all_btn +
             '</div>'
             + rows_html +
             '</form>'
@@ -11815,6 +12005,9 @@ def admin_bulk_delete_run(kind):
     label, _tbl = BULK_KINDS[kind]
     mode = request.form.get("mode", "selected")
     keys = [k for k in request.form.getlist("keys") if k][:5000]
+    if request.args.get("single", "").isdigit():
+        keys = [request.args.get("single")]
+        mode = "selected"
     if mode == "selected" and not keys:
         flash("لم تختر أي عنصر.", "error")
         return redirect(url_for("admin_bulk_delete_page", kind=kind))
@@ -11854,6 +12047,24 @@ def admin_bulk_delete_run(kind):
             else:
                 ids = [int(k) for k in keys if k.isdigit()]
                 db().executemany("DELETE FROM numbers WHERE id=? AND status='sold'", [(i,) for i in ids])
+        elif kind == "inventory":
+            if mode == "all":
+                db().execute("DELETE FROM numbers WHERE status='available'")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM numbers WHERE id=? AND status='available'", [(i,) for i in ids])
+        elif kind == "all_numbers":
+            if mode == "all":
+                db().execute("DELETE FROM numbers")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM numbers WHERE id=?", [(i,) for i in ids])
+        elif kind == "pending":
+            if mode == "all":
+                db().execute("DELETE FROM numbers WHERE status='pending'")
+            else:
+                ids = [int(k) for k in keys if k.isdigit()]
+                db().executemany("DELETE FROM numbers WHERE id=? AND status='pending'", [(i,) for i in ids])
         db().commit()
     except Exception as e:
         db().rollback()
@@ -12118,6 +12329,9 @@ def _stamp_badges_html(n):
 
 def _stamps_bootstrap():
     d = db()
+    _ncols = [r[1] for r in d.execute("PRAGMA table_info(numbers)").fetchall()]
+    if "hidden_for_buyer" not in _ncols:
+        d.execute("ALTER TABLE numbers ADD COLUMN hidden_for_buyer INTEGER DEFAULT 0")
     d.execute("INSERT OR IGNORE INTO stamps(name, color, shape) VALUES('مميز', '#f59e0b', 'seal')")
     sid = d.execute("SELECT id FROM stamps WHERE name='مميز'").fetchone()["id"]
     d.execute("INSERT OR IGNORE INTO number_stamps(number_id, stamp_id) SELECT id, ? FROM numbers WHERE is_premium=1",
@@ -12298,6 +12512,176 @@ def admin_errors_clear():
     audit("errors_clear", "")
     flash("تم مسح سجل الأخطاء.", "success")
     return redirect(url_for("admin_errors_page"))
+
+
+# ============================================================
+# ترحيب صوتي عند تسجيل الدخول أو إنشاء الحساب (5 ثواني)
+# ============================================================
+_WELCOME_TEXT = {
+    "login": "يا هلا وغلا بك في المطري ستور، نورت الموقع، نتمنى لك تجربة ممتعة",
+    "register": "أهلاً بك في عائلة المطري ستور، تم إنشاء حسابك بنجاح، نتمنى لك تجربة ممتعة",
+}
+
+
+def _auth_loader_html(name):
+    """عند تسجيل الدخول/إنشاء الحساب: بطاقة وسط الشاشة 5 ثواني فيها شعار الموقع،
+    واسم الموقع، ومميزات الموقع، وشريط تقدم، ونص (جاري تسجيل الدخول / جاري إنشاء الحساب).
+    الصوت: الملف اللي رفعه الأدمن من الإعدادات (إن وجد)."""
+    import json as _json
+    label = "جاري إنشاء الحساب..." if name == "register" else "جاري تسجيل الدخول..."
+    audio = get_setting("WELCOME_AUDIO", "") or ""
+    if not audio.startswith("/static/audio/"):
+        audio = ""
+    logo_url = _site_icon_url("site_logo")
+    if logo_url:
+        logo = ('<img src="' + logo_url + '" style="width:110px;height:110px;object-fit:contain;'
+                'mix-blend-mode:screen;background:transparent">')
+    else:
+        logo = ico("star", 56)
+    items = [
+        ("star", "أرقام واتساب وتيليجرام جاهزة للتفعيل"),
+        ("shield", "استلام الكود تلقائياً وبسرعة"),
+        ("settings", "شحن رصيدك بأكثر من طريقة دفع"),
+        ("globe", "دعم فني متواصل لمساعدتك"),
+        ("star", "ختوم مميزة وعروض حصرية"),
+    ]
+    lis = "".join(
+        '<div style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;color:#e8e8f5;'
+        'opacity:0;animation:mtSlideIn .55s ease forwards;animation-delay:' + str(round(0.2 + i * 0.7, 1)) + 's">'
+        + ico(ic, 18) + '<span>' + t + '</span></div>' for i, (ic, t) in enumerate(items))
+    card = ('<div style="display:flex;flex-direction:column;align-items:center;gap:14px;max-width:340px;width:90%;'
+            'padding:22px 20px;border-radius:22px;background:linear-gradient(145deg,rgba(30,30,60,.95),rgba(12,12,28,.95));'
+            'border:1px solid rgba(129,140,248,.35);box-shadow:0 20px 50px rgba(0,0,0,.5);font-family:Cairo,sans-serif">'
+            + logo +
+            '<div style="font-size:24px;font-weight:900;letter-spacing:1px;background:linear-gradient(90deg,#818cf8,#10b981);'
+            '-webkit-background-clip:text;background-clip:text;color:transparent">Matari Store</div>'
+            '<div style="display:grid;gap:10px;width:100%;margin-top:4px">' + lis + '</div>'
+            '<div style="width:100%;height:6px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden">'
+            '<div style="height:100%;width:0;background:linear-gradient(90deg,#6366f1,#10b981);animation:mtBar 5s linear forwards"></div></div>'
+            '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:#c7d2fe">'
+            '<span style="display:inline-flex;animation:mtSpin 1s linear infinite">' + ico("settings", 16) + '</span>'
+            + label + '</div></div>')
+    return (
+        '<style>@keyframes mtSpin{to{transform:rotate(360deg)}}@keyframes mtBar{to{width:100%}}'
+        '@keyframes mtSlideIn{from{opacity:0;transform:translateX(70px)}to{opacity:1;transform:translateX(0)}}</style>'
+        '<script>(function(){'
+        'var OVERLAY=' + _json.dumps(card, ensure_ascii=False) + ';'
+        'var AUDIO=' + _json.dumps(audio) + ';'
+        'function init(){'
+        'var form=document.querySelector(\'form[method="POST"],form[method="post"]\');'
+        'if(!form)return;'
+        'form.addEventListener("submit",function(e){'
+        'e.preventDefault();'
+        'var ov=document.createElement("div");ov.id="mtAuthLoader";'
+        'ov.setAttribute("style","position:fixed;inset:0;z-index:99999;display:flex;align-items:center;'
+        'justify-content:center;background:rgba(5,5,15,.88);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)");'
+        'ov.innerHTML=OVERLAY;'
+        'document.body.appendChild(ov);'
+        'if(AUDIO){try{var au=new Audio(AUDIO);au.play();}catch(err){}}'
+        'var wait=new Promise(function(r){setTimeout(r,5000);});'
+        'var req=fetch(form.action||location.href,{method:"POST",body:new FormData(form),'
+        'credentials:"same-origin",redirect:"follow"})'
+        '.then(function(r){return r.text().then(function(h){return {url:r.url,html:h};});})'
+        '.catch(function(){return null;});'
+        'Promise.all([wait,req]).then(function(res){'
+        'var resp=res[1];'
+        'if(!resp){location.href=form.action||location.href;return;}'
+        'var dest=new URL(resp.url,location.href).pathname;'
+        'if(dest!==location.pathname){location.href=resp.url;return;}'
+        'document.open();document.write(resp.html);document.close();'
+        '});'
+        '});'
+        '}'
+        'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",init);}else{init();}'
+        '})();</script>'
+    )
+
+
+@app.route("/favicon.ico")
+def _favicon():
+    url = _site_icon_url("site_logo")
+    if url:
+        return redirect(url)
+    return ("", 204)
+
+
+# ============================================================
+# صوت الترحيب من الأدمن: يرفع ملف صوتك (MBC أو غيره) ويشتغل عند الدخول/التسجيل
+# ============================================================
+_WELCOME_EXT = {"mp3", "wav", "ogg", "m4a"}
+
+
+@app.route("/admin/welcome-sound")
+@admin_required
+def admin_welcome_sound_page():
+    cur = get_setting("WELCOME_AUDIO", "") or ""
+    player = ('<audio controls src="%s" style="width:100%%;margin-top:10px"></audio>' % esc(cur)) if cur else \
+             '<div style="color:var(--muted);font-size:13px">لا يوجد صوت مرفوع الآن، شاشة التحميل تظهر بدون صوت.</div>'
+    body = ('<div class="container" style="max-width:640px">'
+            '<div class="section-title">صوت الترحيب</div>'
+            '<div class="card" style="padding:18px;margin-bottom:14px">'
+            '<div style="font-weight:900;margin-bottom:8px">الصوت الحالي</div>' + player +
+            ('<form method="POST" action="/admin/welcome-sound/remove" style="margin-top:12px">'
+             '<button class="btn btn-sm" type="submit" style="background:rgba(239,68,68,.15);color:#ef4444;'
+             'border:1px solid rgba(239,68,68,.35)">حذف الصوت</button></form>' if cur else "") +
+            '</div>'
+            '<form method="POST" action="/admin/welcome-sound" enctype="multipart/form-data" class="card" style="padding:18px">'
+            '<div style="font-weight:900;margin-bottom:8px">رفع صوت جديد</div>'
+            '<input type="file" name="audio" accept=".mp3,.wav,.ogg,.m4a,audio/*" required style="width:100%;margin-bottom:12px">'
+            '<div style="font-size:12px;color:var(--muted);margin-bottom:12px">الصيغ: mp3، wav، ogg، m4a. الحد 5 ميغا. '
+            'يشتغل مع شاشة 5 ثواني عند تسجيل الدخول وإنشاء الحساب.</div>'
+            '<button class="btn" type="submit">رفع وحفظ</button></form>'
+            '<div style="margin-top:14px"><a href="/admin" class="btn btn-ghost btn-sm">رجوع للوحة</a></div></div>')
+    return page("admin_welcome_sound", body=body)
+
+
+@app.route("/admin/welcome-sound", methods=["POST"])
+@admin_required
+def admin_welcome_sound_upload():
+    f = request.files.get("audio")
+    if not f or not f.filename:
+        flash("اختر ملف صوت.", "error")
+        return redirect(url_for("admin_welcome_sound_page"))
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+    if ext not in _WELCOME_EXT:
+        flash("صيغة غير مدعومة. استخدم mp3 أو wav أو ogg أو m4a.", "error")
+        return redirect(url_for("admin_welcome_sound_page"))
+    data = f.read(5 * 1024 * 1024 + 1)
+    if len(data) > 5 * 1024 * 1024:
+        flash("الملف أكبر من 5 ميغا.", "error")
+        return redirect(url_for("admin_welcome_sound_page"))
+    folder = os.path.join(BASE_DIR, "static", "audio")
+    os.makedirs(folder, exist_ok=True)
+    for old in os.listdir(folder):
+        if old.startswith("welcome_"):
+            try:
+                os.remove(os.path.join(folder, old))
+            except OSError:
+                pass
+    name = "welcome_%s.%s" % (datetime.now().strftime("%Y%m%d%H%M%S"), ext)
+    with open(os.path.join(folder, name), "wb") as out:
+        out.write(data)
+    set_setting("WELCOME_AUDIO", "/static/audio/" + name)
+    audit("welcome_sound_upload", name)
+    flash("تم رفع صوت الترحيب.", "success")
+    return redirect(url_for("admin_welcome_sound_page"))
+
+
+@app.route("/admin/welcome-sound/remove", methods=["POST"])
+@admin_required
+def admin_welcome_sound_remove():
+    folder = os.path.join(BASE_DIR, "static", "audio")
+    if os.path.isdir(folder):
+        for old in os.listdir(folder):
+            if old.startswith("welcome_"):
+                try:
+                    os.remove(os.path.join(folder, old))
+                except OSError:
+                    pass
+    set_setting("WELCOME_AUDIO", "")
+    audit("welcome_sound_remove", "")
+    flash("تم حذف صوت الترحيب.", "success")
+    return redirect(url_for("admin_welcome_sound_page"))
 
 
 def bootstrap_database():
