@@ -2140,6 +2140,19 @@ function autoFilter(sel) {
     var form = sel.closest('form');
     if (form) form.submit();
 }
+function mtCooldown(b, t, sec){
+    var n = sec;
+    b.disabled = true;
+    if (t) t.textContent = 'إعادة الطلب بعد ' + n + ' ث';
+    var iv = setInterval(function(){
+        n--;
+        if (t) t.textContent = 'إعادة الطلب بعد ' + n + ' ث';
+        if (n <= 0) {
+            clearInterval(iv);
+            mtCooldown(b, t, 10);
+        }
+    }, 1000);
+}
 function fetchOTP(nid){
     var b = document.getElementById('otpBtn');
     var t = document.getElementById('otpBtnText');
@@ -2169,7 +2182,7 @@ function fetchOTP(nid){
             }
             
             if (d.ok) {
-                if (r) r.innerHTML = '<div style="color:var(--success);font-weight:700">الكود: <code style="font-size:18px">' + d.code + '</code></div>';
+                if (r) r.innerHTML = '<div style="color:var(--success);font-weight:700">الكود: <code style="font-size:18px">' + d.code + '</code> <button data-code="' + d.code + '" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.dataset.code);this.textContent=&quot;تم النسخ&quot;" style="margin-inline-start:8px;padding:6px 10px;border-radius:10px;border:1px solid rgba(99,102,241,.4);background:rgba(99,102,241,.15);color:var(--primary2);font-weight:800;cursor:pointer">نسخ الكود</button></div>';
                 setTimeout(function(){ location.reload(); }, 1500);
             } else {
                 if (r) r.innerHTML = '<div style="color:var(--danger)">' + (d.error || 'فشل') + '</div>';
@@ -2379,8 +2392,9 @@ def _nav(u):
         '<span class="brand-text">MATARI STORE</span>'
         '<div id="fpsMeter" style="display: inline-flex; align-items: center; gap: 3px; font-family: monospace; font-size: 9px; font-weight: 900; padding: 2px 6px; border-radius: 6px; background: rgba(16,185,129,0.1); color: #10b981; border: 1px solid rgba(16,185,129,0.3); margin-right: 6px; user-select: none;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> <span id="fpsValue">60</span></div>'
         '</a>'
-        '<div style="display:flex;align-items:center;gap:8px">'
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;flex-shrink:0">'
         + admin_btn +
+        '<a href="/lang/' + ("en" if _cur_lang() == "ar" else "ar") + '" title="Language" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:var(--primary2);padding:0;width:40px;height:40px;flex-shrink:0;border-radius:50%;font-weight:900;font-size:11px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box">' + ("EN" if _cur_lang() == "ar" else "عربي") + '</a>'
         '<button onclick="toggleTheme()" id="themeToggle" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:var(--primary2);cursor:pointer;padding:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.3s;width:40px;height:40px">'
         '<svg id="themeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
         '</button>'
@@ -2422,21 +2436,21 @@ def _bottom_nav(u, active=""):
     <nav class="bottom-nav">
       <a href="/"{cls("home")}>
         <svg {svg_style}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        <span>الرئيسية</span>
+        <span>{_tr('home')}</span>
       </a>
       <a href="/store"{cls("store")}>
         <svg {svg_style}><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-        <span>المتجر</span>
+        <span>{_tr('store')}</span>
       </a>
       <a href="/dashboard"{cls("dashboard")} style="position:relative; { 'color: #ef4444 !important;' if unread_count > 0 and active != 'dashboard' else '' }">
         <svg {svg_style} { 'style="filter: drop-shadow(0 0 6px rgba(239,68,68,0.8));"' if unread_count > 0 and active != 'dashboard' else '' }><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         {badge_html}
-        <span>حسابي</span>
+        <span>{_tr('account')}</span>
       </a>
       <a href="/support"{cls("support")} style="position:relative;">
         <svg {svg_style}><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
         {support_badge}
-        <span>الدعم</span>
+        <span>{_tr('support')}</span>
       </a>
     </nav>'''
 
@@ -5997,13 +6011,30 @@ def fetch_otp_route(nid):
     n = db().execute("SELECT * FROM numbers WHERE id=? AND buyer_id=? AND COALESCE(hidden_for_buyer,0)=0", (nid, u["user_id"])).fetchone()
     if not n:
         return jsonify({"ok": False, "error": "غير مصرح"}), 403
-    
+
+    import time as _time
+    _now = _time.time()
+    _sold_ts = 0
+    if n["sold_at"]:
+        try:
+            from datetime import datetime as _dt
+            _sold_ts = _dt.strptime(n["sold_at"], "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            _sold_ts = 0
+    if _sold_ts and _now > _sold_ts + 259200:
+        return jsonify({"ok": False, "error": "انتهت مدة طلب الكود (3 أيام) لهذا الرقم"}), 403
+    try:
+        _last_req = float(n["request_time"]) if n["request_time"] else 0
+    except Exception:
+        _last_req = 0
+    if _now - _last_req < 10:
+        return jsonify({"ok": False, "error": "انتظر %d ثانية قبل إعادة الطلب" % (10 - int(_now - _last_req))}), 429
+
     # الكود القديم المخزن
     old_code = n["last_code"] if n["last_code"] else None
     
     # حفظ وقت الطلب الحالي
-    import time as _time
-    req_time = _time.time()
+    req_time = _now
     db().execute("UPDATE numbers SET request_time=? WHERE id=?", (req_time, nid))
     db().commit()
 
@@ -6022,9 +6053,15 @@ def fetch_otp_route(nid):
         # نجيب الكود من بعد وقت الطلب (عشان نتجنب القديم)
         code, err = _tg_fetch_code(sess, req_time)
     else:
-        code, err = fetch_otp_imap()
-    
+        # كود جديد فقط: بعد الشراء وبعد وقت الطلب بدقيقتين كحد أقصى
+        code, err = fetch_otp_imap(since_ts=max(_sold_ts, _now - 120))
+
     if code:
+        # الكود اللي وصل لزبون ثاني ما يتسلم مرة ثانية
+        _used = db().execute("SELECT 1 FROM code_logs WHERE code=? AND (number_id<>? OR user_id<>?) LIMIT 1",
+                             (code, nid, u["user_id"])).fetchone()
+        if _used:
+            return jsonify({"ok": False, "error": "لم يصل كود جديد بعد. جرب بعد لحظات."})
         # نتأكد إن الكود الجديد مختلف عن القديم
         if old_code and code == old_code:
             return jsonify({"ok": False, "error": "لم يصل كود جديد بعد. جرب بعد لحظات."})
@@ -6366,7 +6403,14 @@ def page(name, active="", **ctx):
         border = "rgba(16,185,129,0.3)" if c == "success" else ("rgba(239,68,68,0.3)" if c == "error" else "rgba(99,102,241,0.3)")
         fh += f'''<div class="toast-message" style="display:flex;align-items:center;gap:12px;background:{bg};border:1px solid {border};padding:14px 18px;border-radius:14px;margin-bottom:10px;color:{color};font-weight:600;font-size:14px;animation: slideDown 0.4s ease; position: relative; backdrop-filter: blur(10px);"><div style="flex-shrink:0;">{ico(icon, 20)}</div><div style="flex:1; line-height:1.5;">{m}</div><button onclick="this.parentElement.style.display='none'" style="background:none;border:none;color:{color};cursor:pointer;opacity:0.6;padding:0;display:flex;">{ico("x", 18)}</button></div>'''
 
-    _extra_head = _auth_loader_html(name) if name in ("login", "register") else ""
+    _extra_head = (_auth_loader_html(name) if name in ("login", "register") else "") + (_trans_js() if _cur_lang() == "en" else "")
+    try:
+        if is_admin(current_user()):
+            _extra_head += _low_stock_banner()
+    except Exception:
+        pass
+    _html_lang = _cur_lang()
+    _html_dir = "ltr" if _html_lang == "en" else "rtl"
     _bt = BACK_TARGETS.get(name)
     if _bt:
         fh = _back_bar(_bt[0], _bt[1]) + fh
@@ -6448,7 +6492,7 @@ def page(name, active="", **ctx):
     # لو الصفحة جاية بـ body جاهز، نستخدمه على طول
     if ctx.get("body"):
         return f'''<!DOCTYPE html>
-<html lang="ar" dir="rtl" data-theme="dark">
+<html lang="{_html_lang}" dir="{_html_dir}" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -9481,7 +9525,7 @@ function changePlatform(nid) {
             ticker_code = ""
 
     return f'''<!DOCTYPE html>
-<html lang="ar" dir="rtl" data-theme="dark">
+<html lang="{_html_lang}" dir="{_html_dir}" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -12768,6 +12812,270 @@ def admin_sell_control():
             '<div style="margin-top:18px"><button class="btn" type="submit">حفظ</button></div></form>'
             '<div style="margin-top:14px"><a href="/admin" class="btn btn-ghost btn-sm">رجوع للوحة</a></div></div>')
     return page("admin_sell_control", body=body)
+
+
+# ============================================================
+# اللغة: عربي / English (تُحفظ في كوكي، ولا تحتاج تسجيل دخول)
+# ============================================================
+_I18N = {
+    "ar": {"home": "الرئيسية", "store": "المتجر", "account": "حسابي", "support": "الدعم"},
+    "en": {"home": "Home", "store": "Store", "account": "Account", "support": "Support"},
+}
+
+
+def _cur_lang():
+    try:
+        l = request.cookies.get("lang", "ar")
+    except RuntimeError:
+        l = "ar"
+    return l if l in _I18N else "ar"
+
+
+def _tr(key):
+    lg = _cur_lang()
+    return _I18N[lg].get(key, _I18N["ar"].get(key, key))
+
+
+@app.route("/lang/<code>")
+def set_lang(code):
+    code = code if code in _I18N else "ar"
+    ref = request.referrer or "/"
+    if not ref.startswith(request.host_url):
+        ref = "/"
+    resp = redirect(ref)
+    resp.set_cookie("lang", code, max_age=31536000, samesite="Lax")
+    return resp
+
+
+@app.after_request
+def _static_cache(resp):
+    if request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+# ============================================================
+# الترجمة الذكية: تترجم نصوص الواجهة تلقائياً عند اختيار English
+# (تغطي العبارات الشائعة في الموقع + أسماء الدول والمنصات)
+# ============================================================
+_EN_TEXTS = {
+    "رجوع": "Back", "رجوع للوحة": "Back to dashboard", "الرجوع للرئيسية": "Back to home",
+    "لوحة المستخدم": "Dashboard", "لوحة الإدارة": "Admin panel", "المتجر": "Store", "الرئيسية": "Home",
+    "حسابي": "Account", "الدعم": "Support", "الدعم الفني": "Technical support",
+    "تسجيل الدخول": "Login", "إنشاء حساب": "Sign up", "إنشاء الحساب": "Create account",
+    "تسجيل الخروج": "Logout", "اسم المستخدم": "Username", "كلمة المرور": "Password",
+    "كلمة السر": "Password", "كلمة السر:": "Password:", "البريد الإلكتروني": "Email",
+    "حفظ حسابي (تسجيل دائم)": "Keep me signed in", "حفظ": "Save", "حذف": "Delete", "تعديل": "Edit",
+    "إضافة": "Add", "بحث": "Search", "نسخ": "Copy", "📋 نسخ كلمة السر": "📋 Copy password",
+    "الكود": "Code", "الكود:": "Code:", "سحب الكود الآن": "Fetch code now", "طلب كود": "Request code",
+    "إعادة الطلب بعد": "Retry in", "الأرقام": "Numbers", "الرقم": "Number", "لا أرقام": "No numbers",
+    "لا توجد أرقام": "No numbers", "لا توجد أرقام متاحة": "No numbers available", "متاح": "Available",
+    "مباع": "Sold", "المباعة": "Sold", "الأرقام المباعة": "Sold numbers", "الحالة": "Status",
+    "الدولة": "Country", "المنصة": "Platform", "السعر": "Price", "الرصيد": "Balance",
+    "إجمالي رصيدي": "My total balance", "إجمالي": "Total", "الإجمالي": "Total", "إيرادات": "Revenue",
+    "المشتريات": "Purchases", "شحن": "Top up", "شحن الآن": "Top up now", "اشحن الآن": "Top up now",
+    "اشحن رصيدك الآن": "Top up your balance now", "تحويل": "Transfer", "بيع رقم": "Sell number",
+    "عرض للبيع": "For sale", "شراء": "Buy", "شراء الآن": "Buy now", "تصفح المتجر": "Browse store",
+    "احصل على رقم": "Get a number", "توجه للشراء": "Go to buy", "واتساب": "WhatsApp",
+    "تيليجرام": "Telegram", "الإحالات": "Referrals", "اربح من دعوة أصدقائك": "Earn by inviting friends",
+    "مستويات VIP": "VIP levels", "خصومات حصرية": "Exclusive discounts",
+    "تواصل معنا الآن": "Contact us now", "الإشعارات": "Notifications",
+    "لا يوجد إشعارات": "No notifications", "الكوبونات": "Coupons", "الفاوتشرات": "Vouchers",
+    "نشط": "Active", "محظور": "Banned", "أدمن": "Admin", "مميز": "Premium", "جديد": "New",
+    "عرض محدود": "Limited offer", "خصم": "Discount", "تأكيد": "Confirm", "تحقق": "Verify",
+    "إلغاء": "Cancel", "إغلاق": "Close", "التاريخ": "Date", "الوقت المتبقي لسحب الكود": "Time left to fetch the code",
+    "خطأ": "Error", "حاول مرة أخرى": "Try again", "لا توجد تذاكر بعد": "No tickets yet",
+    "لا توجد رسائل بعد. ابدأ المحادثة.": "No messages yet. Start the chat.",
+    "صيانة": "Maintenance", "صيانة مؤقتة": "Temporary maintenance",
+    "نعتذر عن إيقاف المتجر مؤقتاً": "Sorry, the store is temporarily closed",
+    "سنعود قريباً بإذن الله": "We will be back soon", "بيانات الدخول": "Login details",
+    "اسم المستخدم أو الآيدي": "Username or ID", "تحديث": "Update", "جاري التحديث...": "Updating...",
+    "جاري تسجيل الدخول...": "Signing in...", "جاري إنشاء الحساب...": "Creating account...",
+    "جاري رفع الملف...": "Uploading file...", "المستخدمون": "Users", "الإعدادات": "Settings",
+    "الإحصائيات": "Statistics", "أسعار شراء الأرقام": "Number buy prices",
+    "مراقبة الأكواد": "Code monitor", "سجل الأكواد": "Code log", "الأكواد": "Codes",
+    "لا توجد أكواد مستلمة بعد": "No codes received yet", "إشعار الإدارة": "Admin notice",
+    "إدارة الإشعارات": "Manage notices", "دليل استخدام الموقع": "Site user guide",
+    "مرحباً بك في متجر مطري": "Welcome to Matari Store",
+    "نقدم لك أفضل الأرقام الموثوقة": "We offer the most trusted numbers",
+    "مع تسليم فوري وسحب أكواد تلقائي": "Instant delivery and automatic code retrieval",
+    "أحدث الأرقام": "Latest numbers", "الشحن": "Top-up", "شحن حسابي (يدوي)": "Manual top-up",
+    "مستواك": "Your level", "اليوم": "Today", "نقل لي": "Transfer to me", "التحقق البشري": "Human check",
+    "أدخل الكود الظاهر": "Enter the displayed code", "ترحيبي": "Welcome",
+    "على جميع الأرقام": "On all numbers", "لفترة محدودة جداً": "For a very limited time",
+    "اليمن": "Yemen", "مصر": "Egypt", "السعودية": "Saudi Arabia", "العراق": "Iraq", "تركيا": "Turkey",
+    "الإمارات": "UAE", "الكويت": "Kuwait", "الأردن": "Jordan", "أمريكا": "USA", "روسيا": "Russia",
+    "ماليزيا": "Malaysia", "الهند": "India", "بريطانيا": "UK", "فرنسا": "France", "ألمانيا": "Germany",
+    "إندونيسيا": "Indonesia", "الصين": "China", "اليابان": "Japan", "كندا": "Canada",
+    "البرازيل": "Brazil", "المغرب": "Morocco", "الجزائر": "Algeria", "تونس": "Tunisia",
+    "ليبيا": "Libya", "السودان": "Sudan", "لبنان": "Lebanon", "سوريا": "Syria", "قطر": "Qatar",
+    "البحرين": "Bahrain", "عُمان": "Oman", "فلسطين": "Palestine", "إيطاليا": "Italy", "إسبانيا": "Spain",
+    "هولندا": "Netherlands", "السويد": "Sweden", "أوكرانيا": "Ukraine", "باكستان": "Pakistan",
+    "بنغلاديش": "Bangladesh", "الفلبين": "Philippines", "تايلاند": "Thailand", "فيتنام": "Vietnam",
+    "أستراليا": "Australia", "المكسيك": "Mexico", "الأرجنتين": "Argentina", "جنوب أفريقيا": "South Africa",
+    "نيجيريا": "Nigeria", "كينيا": "Kenya", "كوريا الجنوبية": "South Korea",
+    "بيع الأرقام متوقف": "Number sales are paused",
+    "قسم بيع الأرقام متوقف مؤقتاً، جرب لاحقاً.": "The number sales section is temporarily paused, please try later.",
+    "شحن بكود فاوتشر": "Top up with a voucher code",
+    "أدخل الكود واستلم الرصيد فوراً": "Enter the code and receive the balance instantly",
+    "جيب": "Jib", "ون كاش": "OneCash",
+    "محفظة إلكترونية يمنية": "Yemeni e-wallet",
+    "دفع بالعملات الرقمية USDT": "Pay with USDT crypto",
+    "رصيدك الحالي": "Your current balance", "العملة": "Currency",
+    "إنهاء الجلسة": "End session", "استلام المكافأة اليومية": "Claim daily reward",
+    "روابط سريعة": "Quick links", "تنبيه المخزون المنخفض": "Low stock alert",
+    "نسخ الكود": "Copy code", "تم النسخ": "Copied",
+    'عرض أرقامي': 'View my numbers',
+    'أرقامي قيد المراجعة': 'My numbers under review',
+    'إحصائياتي': 'My statistics',
+    'إحصائيات': 'Statistics',
+    'أرقامي': 'My numbers',
+    'كل أرقامي': 'All my numbers',
+    'إجمالي المشتريات': 'Total purchases',
+    'أرباح الإحالات': 'Referral earnings',
+    'الآيدي:': 'ID:',
+    'المبلغ ($)': 'Amount ($)',
+    'المكافأة اليومية': 'Daily reward',
+    'بمجرد طلب الكود، سيتم تسجيل الخروج من حسابك على جهازك الشخصي لضمان عدم استرجاع الرقم.': 'Once you request the code, you will be logged out of your account on this device so the number cannot be recovered.',
+    'بيع رقم تيليجرام': 'Sell Telegram number',
+    'تحويل الآن': 'Transfer now',
+    'تحويل رصيد': 'Balance transfer',
+    'تصفح جميع الأرقام المتاحة للبيع مقسمة حسب المنصة (واتساب/تيليجرام) والدولة.': 'Browse all numbers available for sale, split by platform (WhatsApp/Telegram) and country.',
+    'تلقائياً إلى رصيدك.': 'automatically to your balance.',
+    'جميع الأرقام التي اشتريتها موجودة هنا، مع إمكانية سحب الكود في أي وقت.': 'All the numbers you bought are here, with the option to fetch the code at any time.',
+    'جميع بياناتك مشفرة ومحمية بأعلى معايير الأمان في الموقع.': 'All your data is encrypted and protected by the highest security standards on the site.',
+    'رجوع للحساب': 'Back to account',
+    'رجوع للشات': 'Back to chat',
+    'رسوم التحويل:': 'Transfer fee:',
+    'رصيدك الحالي:': 'Your current balance:',
+    'رقم الهاتف (بالصيغة الدولية)': 'Phone number (international format)',
+    'ستصلك إشعارات فورية عند وصول الكود أو عند إتمام أي عملية بنجاح.': 'You will receive instant notifications when the code arrives or any operation completes successfully.',
+    'سجل الأرقام المعلقة': 'Pending numbers log',
+    'سجل التذاكر': 'Tickets log',
+    'سحب الكود': 'Fetch code',
+    'شارك الرابط مع أصدقائك على وسائل التواصل الاجتماعي.': 'Share the link with your friends on social media.',
+    'شارك رابط الإحالة الخاص بك، واربح': 'Share your referral link and earn',
+    'شارك رابطك مع أصدقائك واربح مكافأة مالية عند شراء أول رقم.': 'Share your link with friends and earn a reward when they buy their first number.',
+    'شحن الرصيد': 'Top up balance',
+    'طلب كود التحقق': 'Request verification code',
+    'عرض أسعار الشراء لكل دولة': 'View buy prices by country',
+    'عند تسجيل أي صديق من خلال الرابط وشراءه أول رقم، ستضاف لك مكافأة': 'When a friend registers through the link and buys their first number, a reward is added to you',
+    'عند شراء أول رقم.': 'when they buy their first number.',
+    'قم ببيع رقمك للبوت وسنقوم بربطه فوراً. سيتم تسجيل الخروج من جهازك تلقائياً لحماية حسابك.': 'Sell your number to the bot and we will link it instantly. You will be logged out of your device automatically to protect your account.',
+    'كلما اشتريت أكثر، ترتفع رتبتك وتحصل على خصومات حصرية تلقائية.': 'The more you buy, the higher your rank and the more exclusive discounts you get automatically.',
+    'كيف يعمل النظام؟': 'How does the system work?',
+    'لا توجد أرقام قيد المراجعة حالياً.': 'No numbers under review right now.',
+    'لكل عملية': 'For every operation',
+    'لوحة التحكم الخاصة بك حيث ترى رصيدك وأرقامك المشتراة وإحصائياتك.': 'Your control panel where you see your balance, purchased numbers and statistics.',
+    'متصل الآن': 'Online now',
+    'مرحباً بك في متجري، يمكنك التحويل على الآيدي أدناه.': 'Welcome to my store, you can transfer using the ID below.',
+    'مفتوحة': 'Open',
+    'مكافآت': 'Rewards',
+    'ملاحظة أمنية:': 'Security note:',
+    'ملاحظة هامة': 'Important note',
+    'مُحالون': 'Referred',
+    'نسخ رابط الإحالة': 'Copy referral link',
+    'نضمن لك حماية أرقامك وعدم استرجاعها من قبل البائع الأصلي.': 'We guarantee your numbers are protected and cannot be recovered by the original seller.',
+    'نظام الإحالات': 'Referral system',
+    'كيف يعمل': 'How it works',
+    'آيدي التحويل': 'Transfer ID',
+    'آيدي المستلم': 'Recipient ID',
+    'آيديك (شاركه ليصلك رصيد)': 'Your ID (share it to receive balance)',
+    'الأمان': 'Security',
+    'البحث': 'Search',
+    'الحماية': 'Protection',
+    'الشراء': 'Buying',
+    'أو': 'or',
+    'اختر طريقة الشحن المناسبة لك': 'Choose the right top-up method',
+    'سيتم تحديث المتجر قريباً إن شاء الله.': 'The store will be updated soon, God willing.',
+    'كل ما تحتاج معرفته عن أقسام MATARI STORE': 'Everything you need to know about MATARI STORE sections',
+    'أرسل رصيد لأي صديق باستخدام الآيدي الخاص به داخل الموقع.': 'Send balance to any friend using their ID on the site.',
+    'أضف رصيد لحسابك باستخدام فودافون كاش، جيب، ون كاش، بينانس، أو كود شحن.': 'Add balance to your account using Vodafone Cash, Jeeb, OneCash, Binance, or a voucher code.',
+    'إذا واجهت أي مشكلة، افتح تذكرة جديدة وسيرد عليك فريق الدعم.': 'If you have any problem, open a new ticket and our support team will reply.',
+    'احصل على مكافأة مجانية كل 24 ساعة بمجرد الضغط على زر الاستلام.': 'Get a free reward every 24 hours by pressing the claim button.',
+    'اختر الرقم الذي تريده واضغط شراء ليتم خصم السعر من رصيدك فوراً.': 'Choose the number you want and press Buy to deduct the price from your balance instantly.',
+    'استخدم مربع البحث للعثور على رقم أو دولة معينة بسرعة.': 'Use the search box to quickly find a number or a specific country.',
+    'اضغط على الرقم لتدخل صفحته وتضغط زر سحب الكود ليظهر لك فوراً.': 'Tap the number to open its page and press Fetch code to see it instantly.',
+    'الصفحة الرئيسية التي تعرض أحدث الأرقام المتاحة وأهم الميزات.': 'The home page showing the latest available numbers and key features.',
+    'خصم 0% · إجمالي: $0.00': 'Discount 0% · Total: $0.00',
+}
+
+
+def _trans_js():
+    import json as _json
+    exact = dict(_EN_TEXTS)
+    long_keys = {k: v for k, v in _EN_TEXTS.items() if len(k) >= 10}
+    return ('<script>(function(){'
+            'var EXACT=' + _json.dumps(exact, ensure_ascii=False) + ';'
+            'var LONG=' + _json.dumps(long_keys, ensure_ascii=False) + ';'
+            + _TRANS_RUNNER +
+            '})();</script>')
+
+
+_TRANS_RUNNER = r"""
+var lk = Object.keys(LONG).sort(function(a,b){ return b.length - a.length; });
+var AR = /[\u0600-\u06FF]/;
+function tr(text){
+  var t = text.trim();
+  if (EXACT.hasOwnProperty(t)) return text.replace(t, EXACT[t]);
+  var out = text;
+  for (var i = 0; i < lk.length; i++) {
+    if (out.indexOf(lk[i]) !== -1) out = out.split(lk[i]).join(LONG[lk[i]]);
+  }
+  return out;
+}
+function walk(root){
+  if (!root) return;
+  var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  var list = [], n;
+  while ((n = w.nextNode())) {
+    var p = n.parentNode;
+    if (!p || p.nodeName === 'SCRIPT' || p.nodeName === 'STYLE' || p.nodeName === 'TEXTAREA') continue;
+    if (AR.test(n.nodeValue)) list.push(n);
+  }
+  list.forEach(function(x){ x.nodeValue = tr(x.nodeValue); });
+  if (root.querySelectorAll) {
+    root.querySelectorAll('[placeholder],[title],[aria-label]').forEach(function(el){
+      ['placeholder','title','aria-label'].forEach(function(a){
+        var v = el.getAttribute(a);
+        if (v && AR.test(v)) el.setAttribute(a, tr(v));
+      });
+    });
+  }
+}
+window.mtTranslate = walk;
+function start(){
+  walk(document.body);
+  var mo = new MutationObserver(function(muts){
+    muts.forEach(function(m){
+      m.addedNodes.forEach(function(node){
+        if (node.nodeType === 1) walk(node);
+        else if (node.nodeType === 3 && AR.test(node.nodeValue)) node.nodeValue = tr(node.nodeValue);
+      });
+    });
+  });
+  mo.observe(document.body, {childList: true, subtree: true});
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+else start();
+"""
+
+
+def _low_stock_banner():
+    try:
+        rows = db().execute("SELECT country, platform, COUNT(*) c FROM numbers WHERE status='available' "
+                            "GROUP BY country, platform HAVING c < 3 ORDER BY c ASC").fetchall()
+    except sqlite3.Error:
+        return ""
+    if not rows:
+        return ""
+    items = "".join('<span style="display:inline-block;padding:4px 10px;border-radius:12px;background:rgba(245,158,11,.15);'
+                    'font-size:12px;font-weight:800;margin:2px">%s - %s: %d</span>'
+                    % (esc(r["country"]), esc(r["platform"]), r["c"]) for r in rows[:12])
+    return ('<div class="container" style="margin-top:8px"><div class="card" style="padding:12px;'
+            'border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.06)">'
+            '<b style="color:#f59e0b">تنبيه المخزون المنخفض</b>'
+            '<div style="margin-top:6px">' + items + '</div></div></div>')
 
 
 def bootstrap_database():
