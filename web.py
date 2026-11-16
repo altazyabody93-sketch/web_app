@@ -13272,6 +13272,17 @@ if os.environ.get("MATARI_AUTOPAY", "1") == "1":
     import threading
     threading.Thread(target=daily_backup_worker, daemon=True).start()
 
+# ── بوت تيليجرام داخل نفس العملية: نفس قاعدة البيانات = مزامنة كاملة مع الموقع ──
+# يعمل فقط إذا ضبطت BOT_TOKEN في متغيرات البيئة (ولإيقافه ضع MATARI_BOT=0)
+if os.environ.get("BOT_TOKEN", "").strip() and os.environ.get("MATARI_BOT", "1") == "1":
+    try:
+        import bot as _matari_bot
+        _matari_bot.DB_PATH = DB_PATH          # نفس مسار القاعدة بالضبط
+        _matari_bot.start_in_background()
+        log.info("تم تشغيل بوت تيليجرام داخل الموقع (قاعدة بيانات مشتركة)")
+    except Exception:
+        log.exception("فشل تشغيل بوت تيليجرام")
+
 if __name__ == "__main__":
     log.info("تشغيل السيرفر المحلي على المنفذ %s", PORT)
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
