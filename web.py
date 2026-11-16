@@ -10850,6 +10850,7 @@ CREATE TABLE IF NOT EXISTS feature_registry(
 
 # أعمدة يحتاجها الكود ولم تكن في تعريف SCHEMA القديم (تُضاف لو ناقصة)
 EXTRA_COLUMNS = [
+    ("users", "telegram_id", "INTEGER"),
     ("numbers", "hidden_for_buyer", "INTEGER DEFAULT 0"),
     ("users", "avatar", "TEXT"),
     ("users", "captcha_passed", "INTEGER DEFAULT 0"),
@@ -12402,6 +12403,7 @@ def _stamp_badges_html(n):
 
 def _stamps_bootstrap():
     d = db()
+    d.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tg ON users(telegram_id)")
     if get_setting("COUNTRY_FIX_2", "") != "1":
         for _r in d.execute("SELECT id, phone, country FROM numbers WHERE country='دول أخرى' OR country IS NULL OR country=''").fetchall():
             _c = _tg_country(_r["phone"]) if _r["phone"] else "دول أخرى"
@@ -13076,6 +13078,140 @@ def _low_stock_banner():
             'border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.06)">'
             '<b style="color:#f59e0b">تنبيه المخزون المنخفض</b>'
             '<div style="margin-top:6px">' + items + '</div></div></div>')
+
+
+# ============================================================
+# جسر البوت: حساب واحد للموقع والبوت (يحتاج متغير BRIDGE_SECRET)
+# ============================================================
+def _bridge_ok():
+    import hmac
+    key = os.environ.get("BRIDGE_SECRET", "")
+    if not key:
+        return False
+    return hmac.compare_digest(request.headers.get("X-Bridge-Key", ""), key)
+
+
+def _bridge_out(row):
+    return {"ok": True, "linked": True, "user_id": row["user_id"], "username": row["username"],
+            "custom_id": row["custom_id"],
+            "balance": float(row["balance"] or 0), "is_admin": bool(row["is_admin"]),
+            "is_banned": bool(row["is_banned"])}
+
+
+@app.route("/api/bridge/login", methods=["POST"])
+def bridge_login():
+    if not _bridge_ok():
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = request.get_json(silent=True) or {}
+    tg = d.get("telegram_id")
+    ident = (d.get("username") or "").strip()
+    pw = d.get("password") or ""
+    if not tg or not ident or not pw:
+        return jsonify({"ok": False, "error": "missing"}), 400
+    row = db().execute("SELECT * FROM users WHERE username=? OR email=?", (ident, ident.lower())).fetchone()
+    if not row or not check_password_hash(row["password_hash"], pw):
+        return jsonify({"ok": False, "error": "bad_credentials"}), 401
+    if row["is_banned"]:
+        return jsonify({"ok": False, "error": "banned"}), 403
+    taken = db().execute("SELECT user_id FROM users WHERE telegram_id=? AND user_id<>?",
+                         (int(tg), row["user_id"])).fetchone()
+    if taken:
+        return jsonify({"ok": False, "error": "telegram_taken"}), 409
+    db().execute("UPDATE users SET telegram_id=? WHERE user_id=?", (int(tg), row["user_id"]))
+    db().commit()
+    row = db().execute("SELECT * FROM users WHERE user_id=?", (row["user_id"],)).fetchone()
+    audit("bridge_login", "tg=%s user=%s" % (tg, row["username"]))
+    return jsonify(_bridge_out(row))
+
+
+@app.route("/api/bridge/register", methods=["POST"])
+def bridge_register():
+    if not _bridge_ok():
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = request.get_json(silent=True) or {}
+    tg = d.get("telegram_id")
+    user = (d.get("username") or "").strip()[:30]
+    email = (d.get("email") or "").strip()
+    pw = d.get("password") or ""
+    if not tg or not user or not email or len(pw) < 6:
+        return jsonify({"ok": False, "error": "missing"}), 400
+    if db().execute("SELECT user_id FROM users WHERE telegram_id=?", (int(tg),)).fetchone():
+        return jsonify({"ok": False, "error": "telegram_taken"}), 409
+    res = create_user(user, email, pw)
+    if not res:
+        return jsonify({"ok": False, "error": "exists"}), 409
+    uid = res[0]
+    db().execute("UPDATE users SET telegram_id=? WHERE user_id=?", (int(tg), uid))
+    db().commit()
+    row = db().execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
+    audit("bridge_register", "tg=%s user=%s" % (tg, user))
+    return jsonify(_bridge_out(row))
+
+
+@app.route("/api/bridge/me")
+def bridge_me():
+    if not _bridge_ok():
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    tg = request.args.get("telegram_id", type=int)
+    row = db().execute("SELECT * FROM users WHERE telegram_id=?", (tg,)).fetchone() if tg else None
+    if not row:
+        return jsonify({"ok": False, "linked": False}), 404
+    return jsonify(_bridge_out(row))
+
+
+@app.route("/api/bridge/transfer", methods=["POST"])
+def bridge_transfer():
+    """تحويل رصيد من حساب البوت (الراسل بالتيليجرام) إلى مستخدم بالآيدي المخصص. نفس قواعد /transfer."""
+    if not _bridge_ok():
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = request.get_json(silent=True) or {}
+    tg = d.get("telegram_id")
+    to_custom = str(d.get("to_custom_id") or "").strip()
+    try:
+        amt = round(float(d.get("amount") or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_amount"}), 400
+    if not tg or not to_custom:
+        return jsonify({"ok": False, "error": "missing"}), 400
+    me = db().execute("SELECT * FROM users WHERE telegram_id=?", (int(tg),)).fetchone()
+    if not me:
+        return jsonify({"ok": False, "error": "not_linked"}), 404
+    fee = get_fee()
+    if amt <= fee:
+        return jsonify({"ok": False, "error": "amount_too_small", "fee": fee}), 400
+    target = db().execute("SELECT * FROM users WHERE custom_id=?", (to_custom,)).fetchone()
+    if not target:
+        return jsonify({"ok": False, "error": "target_not_found"}), 404
+    if target["user_id"] == me["user_id"]:
+        return jsonify({"ok": False, "error": "self_transfer"}), 400
+    if target["is_banned"]:
+        return jsonify({"ok": False, "error": "target_banned"}), 403
+    total = round(amt + fee, 4)
+    if me["balance"] < total:
+        return jsonify({"ok": False, "error": "insufficient", "needed": total}), 402
+    net = round(amt - fee, 4)
+    con = db()
+    try:
+        con.execute("BEGIN")
+        upd = con.execute("UPDATE users SET balance=balance-? WHERE user_id=? AND balance>=?",
+                          (total, me["user_id"], total)).rowcount
+        if upd != 1:
+            con.execute("ROLLBACK")
+            return jsonify({"ok": False, "error": "insufficient"}), 402
+        con.execute("UPDATE users SET balance=balance+? WHERE user_id=?", (net, target["user_id"]))
+        con.execute("INSERT INTO transfers(from_id,to_id,amount,fee) VALUES(?,?,?,?)",
+                    (me["user_id"], target["user_id"], amt, fee))
+        con.commit()
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": "tx_failed"}), 500
+    make_safe_backup()
+    audit("transfer_out", "bridge to=%s amt=%s fee=%s" % (to_custom, amt, fee))
+    return jsonify({"ok": True, "net": net, "fee": fee, "to": target["username"],
+                    "target_tg": target["telegram_id"]})
 
 
 def bootstrap_database():
